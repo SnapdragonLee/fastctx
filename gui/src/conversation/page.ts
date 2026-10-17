@@ -177,6 +177,10 @@ export interface PageOptions {
   agentRecord?: ((agent: string) => Promise<AgentActivity>) | undefined;
 }
 
+/** How many times what a conversation offers is asked again after asking
+ *  failed, before only a turn's end asks again. */
+const OFFERS_TRIES = 5;
+
 export class ConversationPage {
   readonly element: HTMLElement;
   private view: ConversationView;
@@ -209,6 +213,10 @@ export class ConversationPage {
   /** Why the watch ended or broke, in the kernel's words, for the hover. */
   private goneWhy = "";
   private offered: Offers | null = null;
+  /** The next asking of what the conversation offers, after one that
+   *  failed, and how many failed in a row. */
+  private offersAgain = -1;
+  private offersFailed = 0;
   private wasMoving = false;
   private commandMenu: Menu<MenuCommand> | null = null;
   private modelPanel: ModelPanel | null = null;
@@ -620,7 +628,9 @@ export class ConversationPage {
     // turn ends; nothing else it offers changes with a turn, and what does
     // change is said by the host (commands, above).
     const moving = this.options.conversation.moving();
-    if (this.wasMoving && !moving && this.offered?.checkpoints) void this.askOffers();
+    // So does an answer given without the host's own part (its commands),
+    // as when its host was too busy to say in the middle of a turn.
+    if (this.wasMoving && !moving && (this.offered?.checkpoints || !this.offered?.commands.length)) void this.askOffers();
     this.wasMoving = moving;
     this.releaseQueued();
     if (!this.frame) this.frame = requestAnimationFrame(() => this.render());
@@ -721,6 +731,7 @@ export class ConversationPage {
   /** Stops what the page keeps asking for. */
   leave(): void {
     clearTimeout(this.looking);
+    clearTimeout(this.offersAgain);
     cancelAnimationFrame(this.frame);
     this.view.destroy();
     this.badge?.dispose();
@@ -1303,12 +1314,23 @@ export class ConversationPage {
 
   private async askOffers(): Promise<void> {
     const controls = this.options.controls;
-    if (!controls) return;
+    if (!controls || this.left) return;
+    clearTimeout(this.offersAgain);
     try {
       this.offered = await controls.offers();
+      this.offersFailed = 0;
     } catch {
+      // The way to its machine broke for a moment: asked again a few times,
+      // soon and then less often; after that, when a turn ends. Its machine
+      // offers a model picker whatever its host answers, so only a machine
+      // out of reach leaves it out.
       this.offered = null;
+      if (this.offersFailed < OFFERS_TRIES) {
+        const wait = 1000 * 2 ** this.offersFailed++;
+        this.offersAgain = window.setTimeout(() => void this.askOffers(), wait);
+      }
     }
+    if (this.left) return;
     this.drawChip();
     this.drawState();
     // What the conversation takes decides which of its turns' actions show.

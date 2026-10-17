@@ -1,14 +1,17 @@
 """A release's smoke test on the machine it runs on, through the command line alone: a computer that
 makes a private network keeps its hub as a system service; it and a second computer log in to it and
 copy files to each other through it; an agent's `run` there reaches the other computer with `on`;
-the node's startup service is installed, serving and taken away where asked; and both computers are
-uninstalled completely, the one keeping the hub with it. Nothing outside a fresh temporary directory
-is used, except the services the test installs and removes again. When a check fails, the logs of
-the nodes, the services and the hub are shown.
+the node's startup service is installed, serving and taken away where asked; on Windows, a managed
+computer comes in by its line run as SYSTEM, as a remote management tool runs it, and removes itself
+when it is taken off the network; and both computers are uninstalled completely, the one keeping the
+hub with it. Nothing outside a fresh temporary directory is used, except the services the test
+installs and removes again and, for the managed computer, SYSTEM's home and a scheduled task. When a
+check fails, the logs of the nodes, the services and the hub are shown.
 
-    python scripts/smoke.py PROGRAM [--service]
+    python scripts/smoke.py PROGRAM [--service] [--managed WINDOWS-ARCHIVE]
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -146,6 +149,8 @@ def main():
     parser.add_argument("program", type=Path)
     parser.add_argument("--service", action="store_true", help="also install and remove the node's startup service")
     parser.add_argument("--expect-bash", metavar="VERSION", help="the version `run` must find bash at, such as 3.2")
+    parser.add_argument("--managed", type=Path, metavar="ARCHIVE",
+                        help="on Windows, the release archive a managed computer's line installs, run as SYSTEM")
     args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix="fastctx-smoke-", dir=os.environ.get("RUNNER_TEMP")))
     lab = Lab(args.program.resolve(), root)
@@ -185,6 +190,9 @@ def main():
 
         if args.service:
             service(lab, root)
+
+        if args.managed:
+            managed(lab, root, args.managed.resolve())
 
         code, out = lab.run("beta", "uninstall", "run", "--everything", "--json", timeout=300)
         check("beta is uninstalled completely", code == 0, out)
@@ -240,6 +248,160 @@ def hands(lab, expect_bash):
         check("an agent's run answers", False, error)
     finally:
         agent.close()
+
+
+def managed(lab, root, archive):
+    """A managed computer installed from its line by the system's own account, as a remote
+    management tool runs it (`world-network.md`, 登录与入网): the line downloads the archive placed
+    on alpha's hub and installs it, and its last line says which machine it is; taken off the
+    network, the computer uninstalls itself. On Windows the line runs as SYSTEM, whose node lives in
+    the home Fastctx gives SYSTEM; on a Mac it runs as root, whose node is a LaunchDaemon."""
+    version = lab.run("alpha", "--version")[1].split()[1]
+    releases = root / "alpha" / "hub" / "releases" / f"v{version}"
+    releases.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(archive, releases / archive.name)
+    digest = hashlib.sha256((releases / archive.name).read_bytes()).hexdigest()
+    (releases / "SHA256SUMS").write_bytes(f"{digest}  {archive.name}\n".encode())
+    system = "windows" if os.name == "nt" else "mac"
+    made = subprocess.run([str(lab.program), "token", "new", "root", "--for", system, "--managed", "--name", "managed"],
+                          env=lab.env("alpha"), capture_output=True, text=True, timeout=180)
+    line = made.stdout.strip()
+    if not check(f"alpha makes a managed {system} computer's line", made.returncode == 0 and line,
+                 made.stdout + made.stderr):
+        return
+    if system == "mac":
+        managed_mac(lab, root, line)
+        return
+    data = Path(os.environ["ProgramData"])
+    work = data / "fastctx-smoke"
+    work.mkdir(exist_ok=True)
+    out = work / "out.txt"
+    out.unlink(missing_ok=True)
+    # Marks in a file of their own say whether the script went on after the
+    # line, whatever became of its output.
+    marks = work / "marks.txt"
+    marks.unlink(missing_ok=True)
+    # The redirections go first: written after `%errorlevel%`, its digit
+    # would be taken for the handle to redirect (`EXIT=0>> file`).
+    (work / "run.cmd").write_bytes((f"@echo off\r\n> {marks} echo started\r\n{line} > {out} 2>&1\r\n"
+                                    f">> {marks} echo after the line %errorlevel%\r\n>> {out} echo EXIT=%errorlevel%\r\n"
+                                    f">> {marks} echo wrote its end\r\n").encode("ascii"))
+    task = "fastctx-smoke-managed"
+    home = data / "Fastctx"
+    first = len(RESULTS)
+    before = node_services()
+    try:
+        made = subprocess.run(["schtasks", "/create", "/tn", task, "/ru", "SYSTEM", "/sc", "once", "/st", "00:00",
+                               "/tr", f"cmd /c {work / 'run.cmd'}", "/f"], capture_output=True, text=True)
+        ran = subprocess.run(["schtasks", "/run", "/tn", task], capture_output=True, text=True)
+        check("the line is started as SYSTEM", made.returncode == 0 and ran.returncode == 0,
+              made.stdout + made.stderr + ran.stdout + ran.stderr)
+
+        def said():
+            return out.is_file() and "EXIT=" in out.read_text(encoding="utf-8", errors="replace")
+
+        if not until("the line ends", said, 600):
+            # What stands now, before taking it off the network changes it.
+            print("== marks.txt")
+            print(marks.read_text(encoding="utf-8", errors="replace") if marks.is_file() else "(none)")
+            print(subprocess.run(["schtasks", "/query", "/tn", task, "/v", "/fo", "list"], capture_output=True, text=True).stdout)
+            managed_diagnostics(data, home, out)
+        text = out.read_text(encoding="utf-8", errors="replace") if out.is_file() else ""
+        lines = [said for said in text.splitlines() if said.strip() and not said.startswith("EXIT=")]
+        check("it installs the computer and says so in its last line", "EXIT=0" in text and bool(lines)
+              and lines[-1].startswith("Installed: this machine is managed"), text)
+        worlds = [home / name for name in (".fastctx", ".fastctx-dev") if (home / name / "world").is_dir()]
+        check("its World is in the home Fastctx gives SYSTEM", len(worlds) == 1, sorted(p.name for p in home.glob("*")))
+        access = subprocess.run(["icacls", str(home)], capture_output=True, text=True).stdout
+        check("only SYSTEM and the administrators may enter that home", "NT AUTHORITY\\SYSTEM" in access
+              and "BUILTIN\\Administrators" in access and "Users" not in access and "Everyone" not in access, access)
+        owners = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                 "Get-CimInstance Win32_Process -Filter \"Name='fastctx.exe'\" | "
+                                 # Windows writes the arguments quoted: `"node" "--dir" "..."`.
+                                 "Where-Object { $_.CommandLine -like '*\\Fastctx\\.fastctx*' -and $_.CommandLine -match ' \"?node\"? ' } | "
+                                 "ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User }"],
+                                capture_output=True, text=True).stdout.split()
+        check("its node runs as SYSTEM", bool(owners) and set(owners) == {"SYSTEM"}, owners)
+        until("alpha sees the managed computer online", lambda: lab.online("alpha", "managed"), 120)
+        code, said_out = lab.run("alpha", "remove", "managed", "--everything", timeout=180)
+        check("alpha takes it off the network, to uninstall with everything", code == 0, said_out)
+
+        # alpha's and beta's own node services stay: the managed computer's is
+        # the one its line brought.
+        theirs = node_services() - before
+
+        def uninstalled():
+            return not (node_services() & theirs) and not any((world / "bin").exists() for world in worlds)
+
+        until("it uninstalls itself, its service with it", uninstalled, 300)
+    finally:
+        if not all(RESULTS[first:]):
+            managed_diagnostics(data, home, out)
+        subprocess.run(["schtasks", "/delete", "/tn", task, "/f"], capture_output=True)
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def node_services():
+    """The names of the node services on this Windows computer."""
+    listed = subprocess.run(["sc", "query", "type=", "service", "state=", "all"], capture_output=True, text=True).stdout
+    return set(re.findall(r"SERVICE_NAME: (fastctx-service-node-\S+)", listed))
+
+
+def managed_diagnostics(data, home, out):
+    """What the managed Windows computer's line, processes, services and logs said."""
+    print("\n--- managed computer", flush=True)
+    print(f"== {out.name}")
+    print(out.read_text(encoding="utf-8", errors="replace") if out.is_file() else "(none)")
+    print("== fastctx processes: id, parent, owner, command line")
+    print(subprocess.run(["powershell", "-NoProfile", "-Command",
+                          "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'fastctx.exe','cmd.exe' } | "
+                          "ForEach-Object { '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, "
+                          "(Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User, $_.CommandLine }"],
+                         capture_output=True, text=True).stdout)
+    services = subprocess.run(["sc", "query", "type=", "service", "state=", "all"], capture_output=True, text=True).stdout
+    for name in sorted(set(re.findall(r"SERVICE_NAME: (fastctx\S*)", services))):
+        print(f"== service {name}")
+        print(subprocess.run(["sc", "queryex", name], capture_output=True, text=True).stdout)
+        print(subprocess.run(["sc", "qc", name], capture_output=True, text=True).stdout)
+    logs = [*home.glob("*/world/node.log"), *home.glob("*/guardian.log"), *home.glob("*/service-*.log"),
+            *(data / "fastctx-services").glob("**/*.log")]
+    for log in logs:
+        print(f"== {log}")
+        try:
+            print("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]))
+        except OSError as error:
+            print(f"({error.strerror})")
+
+
+def managed_mac(lab, root, line):
+    """The Mac's line run as root, with root's own home: its node is a LaunchDaemon that runs as root
+    from the start of the machine, and goes when the Mac is taken off the network."""
+    out = root / "managed-mac.txt"
+    done = subprocess.run(["sudo", "-n", "-H", "/bin/sh", "-c", f"{line} > {out} 2>&1"], capture_output=True, text=True,
+                          timeout=900)
+    text = out.read_text(encoding="utf-8", errors="replace") if out.is_file() else done.stdout + done.stderr
+    lines = [said for said in text.splitlines() if said.strip()]
+    check("as root, it installs the Mac and says so in its last line", done.returncode == 0 and bool(lines)
+          and lines[-1].startswith("Installed: this machine is managed"), text)
+
+    def daemons():
+        return sorted(Path("/Library/LaunchDaemons").glob("fastctx-service-node-*.plist"))
+
+    check("its node is a LaunchDaemon", len(daemons()) == 1, daemons())
+    listing = subprocess.run(["ps", "-axo", "user=,command="], capture_output=True, text=True).stdout
+    # /var is /private/var on a Mac: the World's path may be written either way.
+    nodes = [said.split()[0] for said in listing.splitlines() if " node --dir " in said and "/var/root/.fastctx" in said]
+    check("its node runs as root, in root's home", bool(nodes) and set(nodes) == {"root"}, nodes)
+    until("alpha sees the managed Mac online", lambda: lab.online("alpha", "managed"), 120)
+    code, said = lab.run("alpha", "remove", "managed", "--everything", timeout=180)
+    check("alpha takes it off the network, to uninstall with everything", code == 0, said)
+
+    def uninstalled():
+        left = subprocess.run(["sudo", "-n", "/bin/sh", "-c", "ls -d /var/root/.fastctx*/bin 2>/dev/null"],
+                              capture_output=True, text=True).stdout.strip()
+        return not daemons() and not left
+
+    until("it uninstalls itself, its LaunchDaemon with it", uninstalled, 300)
 
 
 def node_processes(root, who):

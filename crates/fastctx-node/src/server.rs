@@ -87,6 +87,13 @@ async fn converse(node: &Arc<Node>, connection: Connection) -> std::io::Result<(
                 .await?;
             return writer.drain().await;
         }
+        // A conversation of this machine is reached only by whom it works
+        // for, as from another machine (`admission::local`).
+        if let Err(failure) = crate::admission::local::admit(node, &hello.peer, &call) {
+            writer.send(&json(&NodeFrame::Reply { id, reply: Err(failure) })).await?;
+            writer.drain().await?;
+            continue;
+        }
         if let Call::Watch { resident, machine, composer, held, now } = call {
             // Watching a conversation anywhere is the user's, with this
             // computer's logins.
@@ -1154,9 +1161,9 @@ pub(crate) async fn handle(node: &Arc<Node>, peer: &Peer, call: Call) -> Result<
                 .map(Reply::MachineLog)
                 .map_err(Failure::new)
         }
-        Call::ServerCommand { hub, account, name, expires, managed, uses, label, windows } => {
+        Call::ServerCommand { hub, account, name, expires, managed, uses, label, windows, mac } => {
             users_voice(node, peer)?;
-            let code = crate::server_invitation::Code { name, expires, managed, uses, label, windows };
+            let code = crate::server_invitation::Code { name, expires, managed, uses, label, windows, mac };
             crate::server_invitation::command(node, hub.as_ref(), &account, code)
                 .await
                 .map(|command| Reply::ServerInvitation { command })
@@ -1478,26 +1485,45 @@ async fn who(
     };
     let asks_for = |machine: &MachineName| asked.as_ref().is_none_or(|asked| asked.contains(machine));
     let mut machines = Vec::new();
-    if asks_for(&here) {
+    // This computer answers only to whom may work on it: an agent assisting
+    // an account that may not is not shown it, not even by name
+    // (`world-network.md`, 一个居民替谁干活).
+    let works_here = node.works_here(acting).is_ok();
+    if works_here && asks_for(&here) {
         machines.push(match who_here(node, all, town.clone(), since).await {
-            Ok(mut reply) => {
-                // An agent assisting an account that may not work here sees
-                // only what works for the accounts it does (`world-network.md`,
-                // 共享机器与智能体协助).
-                if node.works_here(acting).is_err() {
-                    crate::who::only_for(node, acting, &mut reply);
-                }
-                MachineWho::Answered { reply }
-            }
+            Ok(reply) => MachineWho::Answered { reply: crate::admission::seen::who_here(node, acting, reply) },
             Err(error) => MachineWho::NoAnswer { machine: here.clone(), reason: error.message },
         });
     }
-    let reachable: Vec<_> = crate::around::reachable(node, acting, fastctx_types::access::Purpose::Look)
+    let reachable: Vec<_> = crate::around::reachable_each(node, acting, fastctx_types::access::Purpose::Look)
         .into_iter()
         .filter(|machine| asks_for(&machine.name))
         .collect();
+    // A project may name machines out of the asker's reach: those go
+    // unnamed rather than said unreachable.
+    let mut within: Vec<MachineName> = reachable.iter().map(|machine| machine.name.clone()).collect();
+    if works_here {
+        within.push(here.clone());
+    }
     let heard = crate::around::ask_each(reachable, |_| RemoteCall::Who { all, town: town.clone(), since }).await;
     for (machine, heard) in heard {
+        // A machine asked as several accounts: what each was shown, as one
+        // answer; one that answered stands over one that did not.
+        let known = machines.iter().position(|answer| match answer {
+            MachineWho::Answered { reply } => reply.machine == machine,
+            MachineWho::Offline { machine: name, .. } | MachineWho::NoAnswer { machine: name, .. } => *name == machine,
+        });
+        if let Some(at) = known {
+            if let crate::around::Heard::Answered(RemoteReply::Who(reply)) = heard
+                && reply.machine == machine
+            {
+                match &mut machines[at] {
+                    MachineWho::Answered { reply: answer } => answer.merge(reply),
+                    other => *other = MachineWho::Answered { reply },
+                }
+            }
+            continue;
+        }
         machines.push(match heard {
             crate::around::Heard::Answered(RemoteReply::Who(reply)) if reply.machine == machine => {
                 MachineWho::Answered { reply }
@@ -1510,7 +1536,7 @@ async fn who(
         });
     }
     if let Some(asked) = asked {
-        for name in asked {
+        for name in asked.into_iter().filter(|name| within.contains(name)) {
             if !machines.iter().any(|answer| match answer {
                 MachineWho::Answered { reply } => reply.machine == name,
                 MachineWho::Offline { machine, .. } | MachineWho::NoAnswer { machine, .. } => *machine == name,
@@ -1560,6 +1586,7 @@ async fn nodes(node: &Arc<Node>, acting: &fastctx_types::access::Acting) -> Resu
     use fastctx_net::around::{self, Heard, Reachable};
 
     let here = node.machine();
+    let works_here = node.works_here(acting).is_ok();
     let links = node
         .links()
         .into_iter()
@@ -1594,7 +1621,16 @@ async fn nodes(node: &Arc<Node>, acting: &fastctx_types::access::Acting) -> Resu
                     written: node.written(&link, &name).to_string(),
                     online: online_known.then_some(seen.online),
                     since: seen.since,
-                    through: seen.through.clone(),
+                    // The machine its link goes through is said only when
+                    // the asker may work on it too.
+                    through: seen.through.clone().filter(|through| {
+                        MachineName::try_from(through.clone()).is_ok_and(|through| {
+                            (works_here && view.is_me(&through))
+                                || view
+                                    .account_for(&logins, &view.me, &through, fastctx_types::access::Purpose::Hands)
+                                    .is_some()
+                        })
+                    }),
                     allows_direct: !seen.direct.is_empty(),
                     path: Some(link.path_to(&name)),
                     facts,
@@ -1610,12 +1646,13 @@ async fn nodes(node: &Arc<Node>, acting: &fastctx_types::access::Acting) -> Resu
             name: view.hub_name.clone(),
             link: link.state(),
             logins,
-            home: view.me().and_then(|me| me.home.clone()),
+            // Whose this computer is, to whom may work on it alone.
+            home: view.me().and_then(|me| me.home.clone()).filter(|_| works_here),
             machines,
         }
     })
     .await;
-    let facts = node.works_here(acting).is_ok().then(|| crate::world::facts(node));
+    let facts = works_here.then(|| crate::world::facts(node));
     Ok(NodesReply { machine: here, facts, hubs })
 }
 
