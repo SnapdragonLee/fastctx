@@ -154,6 +154,8 @@ pub struct Former {
 /// how far into its ledger.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Heard {
+    #[serde(default)]
+    pub user_prompt: Option<String>,
     pub town: Option<TownName>,
     pub ledger: u64,
 }
@@ -461,6 +463,7 @@ impl Residents {
         }
         let resident = new_id(&host.agent, &state)?;
         let about = About {
+            mcp_off: Default::default(),
             id: resident.clone(),
             host,
             machine: machine.clone(),
@@ -607,6 +610,21 @@ impl Residents {
         records::write_about(&world.conversation(id), &about)?;
         live.about = about;
         Ok(true)
+    }
+
+    pub fn set_mcp_off(
+        &self,
+        world: &WorldDir,
+        id: &ResidentId,
+        off: std::collections::BTreeSet<String>,
+    ) -> io::Result<()> {
+        let mut state = self.lock();
+        let live = state.live.get_mut(id).ok_or_else(|| io::Error::other("unknown conversation"))?;
+        let mut about = live.about.clone();
+        about.mcp_off = off;
+        records::write_about(&world.conversation(id), &about)?;
+        live.about = about;
+        Ok(())
     }
 
     /// A new id for a resident of `agent`, unused on this machine.
@@ -1029,7 +1047,7 @@ mod lifetime_tests {
         for index in 0..512 {
             let arrived = residents.arrive(&world, &machine, host.clone(), hints(index)).unwrap();
             let id = &arrived.resident;
-            residents.set_heard(id, Heard { town: None, ledger: index });
+            residents.set_heard(id, Heard { user_prompt: None, town: None, ledger: index });
             residents.set_inbox(id, format!("old-{index}"));
             residents.set_inbox(id, format!("new-{index}"));
             assert!(residents.resident_of_inbox(&format!("old-{index}")).is_none());

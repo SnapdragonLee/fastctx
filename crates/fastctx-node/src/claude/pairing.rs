@@ -66,7 +66,14 @@ pub(crate) async fn directory(
     let reserve = || -> io::Result<String> {
         validate_session(&session)?;
         let source = exchange::sessions(node.world.path()).join(&session);
-        fastctx_platform::ensure_private_dir(&source)?;
+        // A session resumed once its records were gathered into its
+        // conversation's room finds this path an alias of the room
+        // (`gather::claude_room`), which is private already.
+        let aliased = std::fs::symlink_metadata(&source)
+            .is_ok_and(|metadata| fastctx_platform::owned_directory::is_link(&metadata));
+        if !aliased {
+            fastctx_platform::ensure_private_dir(&source)?;
+        }
         let registration = Registration {
             session,
             previous,
@@ -105,6 +112,7 @@ pub(crate) async fn directory(
             crate::focus::hand_to_session(&node.world.conversation(&id), &source)?;
         }
         // Its project's record, with the user's instructions for it.
+        crate::profile::session::hand_to_session(node, &id, &source)?;
         crate::town::instructions::hand_to_session(node, &id, &source)?;
         if registration.process.is_some() {
             fastctx_platform::publish(
@@ -222,6 +230,7 @@ pub(super) fn resident(node: &Node, registration: &Registration) -> io::Result<R
             let id = node.residents.new_id(&agent).map_err(io::Error::other)?;
             let at = first.at.unwrap_or_else(Timestamp::now);
             let about = About {
+                mcp_off: Default::default(),
                 id: id.clone(),
                 host: Host {
                     agent,

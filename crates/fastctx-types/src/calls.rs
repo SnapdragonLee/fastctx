@@ -43,6 +43,37 @@ pub enum Call {
         account: Option<crate::AccountName>,
         collab: crate::collab::Collab,
     },
+    /// The account's own layer (`world-user-config.md`) as `account` has it
+    /// at `hub`; the one account the asking session works for, or this
+    /// computer is logged in to, when none is named.
+    /// A dedicated JSON-RPC stream for the calling account conversation.
+    McpRelay {
+        name: String,
+    },
+    ProfileRead {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hub: Option<crate::HubName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<crate::AccountName>,
+    },
+    /// Writes what `ProfileRead` reads, over the version it was read at. Its
+    /// servers are written through `Mcp`, which keeps what a command server
+    /// needs on its machine; this keeps the list as it was read.
+    ProfileWrite {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hub: Option<crate::HubName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<crate::AccountName>,
+        profile: crate::profile::Profile,
+    },
+    /// The account's MCP servers, chosen as `ProfileRead` chooses it.
+    Mcp {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hub: Option<crate::HubName>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account: Option<crate::AccountName>,
+        mcp: crate::mcp::McpCall,
+    },
     /// Which optional parts of the interface this computer shows; its
     /// graphical interface and its TUI share them (`crate::features`).
     Features,
@@ -654,6 +685,13 @@ pub enum Reply {
     CollabRead(crate::collab::CollabView),
     CollabWritten {
         version: u64,
+    },
+    Profile(Box<crate::mcp::ProfileView>),
+    ProfileWritten {
+        version: u64,
+    },
+    Mcp {
+        result: crate::mcp::McpReply,
     },
     Features(crate::features::Features),
     ComposerUploaded(Box<crate::composer::UploadResult>),

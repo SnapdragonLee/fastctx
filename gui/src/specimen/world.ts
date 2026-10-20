@@ -585,10 +585,10 @@ export function specimenAgents(machine: string, at: Date = new Date()): WorldAge
     models: {
       kind: "known",
       value: [
-        { id: "gpt-6.1-sol", model: "gpt-6.1-sol", display_name: "GPT-6.1 Sol", description: "", is_default: true, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max", "ultra"]) },
-        { id: "gpt-6-astra", model: "gpt-6-astra", display_name: "GPT-6 Astra", description: "", is_default: false, default_reasoning_effort: "high", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max", "ultra"]) },
-        { id: "gpt-6-luna", model: "gpt-6-luna", display_name: "GPT-6 Luna", description: "", is_default: false, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max"]) },
-        { id: "gpt-5.5", model: "gpt-5.5", display_name: "GPT-5.5", description: "", is_default: false, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh"]) },
+        { id: "gpt-6.1-sol", model: "gpt-6.1-sol", display_name: "GPT-6.1 Sol", description: "", is_default: true, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max", "ultra"]), context_window: 500_000, max_context_window: 872_000 },
+        { id: "gpt-6-astra", model: "gpt-6-astra", display_name: "GPT-6 Astra", description: "", is_default: false, default_reasoning_effort: "high", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max", "ultra"]), context_window: 272_000, max_context_window: 872_000 },
+        { id: "gpt-6-luna", model: "gpt-6-luna", display_name: "GPT-6 Luna", description: "", is_default: false, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max"]), context_window: 272_000, max_context_window: 872_000 },
+        { id: "gpt-5.5", model: "gpt-5.5", display_name: "GPT-5.5", description: "", is_default: false, default_reasoning_effort: "medium", reasoning_efforts: efforts(["low", "medium", "high", "xhigh"]), context_window: 272_000, max_context_window: 872_000 },
       ],
     },
     integration: { kind: "known", value: "in" },
@@ -627,15 +627,17 @@ export function specimenAgents(machine: string, at: Date = new Date()): WorldAge
     version: { kind: "known", value: "2.1.289 (Claude Code)" },
     launch: { kind: "known", value: { kind: "claude_command" } },
     login: { kind: "known", value: machine === "lab" ? { kind: "logged_out" } : { kind: "logged_in", method: "claude.ai" } },
-    // Claude Code's documented aliases, as a node gives them for a login
-    // that has run no session yet.
+    // The World's table of Claude models (`fastctx-hosts`, claude/models.rs),
+    // as a node gives it, by full model id.
     models: {
       kind: "known",
       value: [
-        ["opus", "Opus", "medium"],
-        ["fable", "Fable", "high"],
-        ["sonnet", "Sonnet", "medium"],
-        ["haiku", "Haiku", "medium"],
+        ["claude-opus-5-5", "Opus 5.5", "medium"],
+        ["claude-fable-5-1", "Fable 5.1", "high"],
+        ["claude-sonnet-5-5", "Sonnet 5.5", "medium"],
+        ["claude-haiku-5-5", "Haiku 5.5", "medium"],
+        ["claude-opus-5", "Opus 5", "high"],
+        ["claude-sonnet-5", "Sonnet 5", "high"],
       ].map(([model, name, effort], at) => ({
         id: model!,
         model: model!,
@@ -644,6 +646,8 @@ export function specimenAgents(machine: string, at: Date = new Date()): WorldAge
         is_default: at === 0,
         default_reasoning_effort: effort!,
         reasoning_efforts: efforts(["low", "medium", "high", "xhigh", "max"]),
+        context_window: 1_000_000,
+        max_context_window: 1_000_000,
       })),
     },
     integration: { kind: "known", value: "in" },

@@ -236,6 +236,13 @@ pub struct AgentModel {
     pub is_default: bool,
     pub default_reasoning_effort: String,
     pub reasoning_efforts: Vec<ReasoningEffort>,
+    /// The context window it works in unless told otherwise, in tokens,
+    /// where its host says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    /// The most its context window may be set to, where its host says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_window: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,11 +286,16 @@ pub struct Choices {
     /// its own (`world-run.md`, 这里).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_on: Option<crate::access::Written>,
+    /// The account's MCP servers it starts without (`world-user-config.md`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub mcp_off: std::collections::BTreeSet<String>,
 }
 
 /// Omitted fields keep the official program's configured defaults.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionOptions {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub mcp_off: std::collections::BTreeSet<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
 }

@@ -59,6 +59,20 @@ import { enUsage, zhUsage } from "./app/usage/words";
 import "./app/usage/usage.css";
 import { specimenUsage } from "./specimen/usage";
 import { enAgentLogins, zhAgentLogins } from "./app/agent-logins-words";
+import { enProfile, zhProfile } from "./app/profile-words";
+import { isHost, keepSection, sectionOf, tabOf } from "./app/agent-sections";
+import "./app/agent-sections.css";
+import { PromptPage } from "./app/prompt-page";
+import { HostPrefs } from "./app/host-prefs";
+import { ProfileDefaults } from "./app/profile-defaults";
+import { McpPage } from "./app/mcp-page";
+import type { ProfileCalls } from "./app/profile-account";
+import "./app/profile.css";
+import "./app/host-prefs.css";
+import { mcp as mcpCall, readProfile, writeProfile } from "./world/profile";
+import { specimenProfileCalls } from "./specimen/profile";
+import { ServerLists } from "./app/mcp-switches";
+import type { FocusServers } from "./app/focus-panel";
 import { enAgentChange, zhAgentChange } from "./app/agent-change";
 import "./app/agent-logins.css";
 import { specimenChange as specimenLoginChange, specimenFolder, specimenLogins, specimenPreview, specimenScan, specimenSetTitle, specimenTakeUp } from "./specimen/logins";
@@ -275,6 +289,8 @@ import { installAccess } from "./app/access";
 import { installBack, setPageBack } from "./app/back";
 import { installFrame } from "./app/frame";
 import { nameCodeCopy } from "./conversation/prose";
+import { agentKind } from "./app/model-memory";
+import type { AgentModel } from "./world/agents";
 
 const params = new URLSearchParams(location.search);
 const language: "zh" | "en" = (() => {
@@ -332,6 +348,38 @@ const live = store.live;
 let asDevice = live ? !onComputer() : params.has("phone");
 
 const head = (title: string, actions?: string) => pageHead(shellWords, title, actions, backName);
+/** The account's own configuration, from the World or the specimen's
+ *  memory, which lasts the visit. */
+const profileWrites: ProfileCalls = live
+  ? { read: readProfile, write: writeProfile, mcp: mcpCall }
+  : specimenProfileCalls();
+/** What the account's preferences name for a new conversation; whatever
+ *  this device writes reaches it at once. */
+const profileDefaults = new ProfileDefaults(profileWrites);
+const profileCalls: ProfileCalls = {
+  ...profileWrites,
+  write: async (hub, account, profile) => {
+    const version = await profileWrites.write(hub, account, profile);
+    profileDefaults.saved(hub, account, { ...profile, version });
+    return version;
+  },
+};
+const serverLists = new ServerLists(profileCalls, store, english ? enProfile : zhProfile);
+
+/** The models an agent's logins offer across the machines this computer
+ *  reaches, each once, in the order the first machine to list it gave. */
+async function agentModels(agent: "claude" | "codex"): Promise<AgentModel[]> {
+  const world = await agentsOn(null);
+  const seen = new Map<string, AgentModel>();
+  for (const machine of world.machines) {
+    if (machine.kind !== "answered") continue;
+    for (const facts of machine.reply.agents) {
+      if (agentKind(facts.agent) !== agent || facts.models.kind !== "known") continue;
+      for (const model of facts.models.value) if (!seen.has(model.model)) seen.set(model.model, model);
+    }
+  }
+  return [...seen.values()];
+}
 
 let place: Place = { kind: "home" };
 
@@ -471,17 +519,20 @@ const makeNewTalk = (town: string | null) => new NewTalk({
   head: (title) => head(title),
   words: english ? enNewTalk : zhNewTalk,
   focusWords,
+  servers: (login) => serverLists.switches(login),
+  defaults: profileDefaults,
   homeWords: agentHomeWords,
   modelWords: english ? enModelPanel : zhModelPanel,
   agents: (machine) => agentsOn(machine),
   folders: (machine, path) => (live ? foldersOf(machine, path) : specimenFolders(machine, path)),
-  async begin({ agent, machine, town, text, model, effort, attachments, account, focus, home, filesOn }) {
+  async begin({ agent, machine, town, text, model, effort, attachments, account, focus, home, filesOn, mcpOff }) {
     if (!live) return specimenBegin(params.get("start"));
     const { to } = await openAgent(agent, machine, town, text, model, effort, attachments, {
       ...(account ? { account } : {}),
       ...(focus.machines.length ? { focus } : {}),
       ...(home ? { home } : {}),
       ...(filesOn ? { files_on: filesOn } : {}),
+      ...(mcpOff.length ? { mcp_off: mcpOff } : {}),
     });
     void store.refresh();
     return to;
@@ -947,6 +998,7 @@ followSwitches();
 const shell = new Shell({
   store,
   words: shellWords,
+  sections: english ? enProfile : zhProfile,
   updates: { offered: appUpdates.offered, open: () => updateCard.open(), words: updateWords },
   newTalk: () => beginTalk(place.kind === "project" || place.kind === "new" ? place.town : null),
   newProject: (login) => projectForm.open(null, login),
@@ -1116,6 +1168,36 @@ function focusPlacesFor(address: Address): FocusPlace[] {
 function focusOf(known: ResidentNow | null): Focus | null {
   if (!known || known.about.origin.kind !== "user" || !known.about.world_started) return null;
   return known.about.focus ?? noFocus();
+}
+
+/** The account's MCP servers as the conversation at `address` switches
+ *  them, where it works for one account the user opened it from: each switch
+ *  is sent as it is turned, and shown turned until the World says
+ *  otherwise. */
+function conversationServers(address: Address): FocusServers | undefined {
+  const { login } = livesFor(address);
+  if (!login || !focusOf(residentAt(store.world.peek(), address))) return undefined;
+  let turned: string[] | null = null;
+  return {
+    ...serverLists.switches(() => login),
+    off: () => turned ?? residentAt(store.world.peek(), address)?.about.mcp_off ?? [],
+    changed: (off) => {
+      turned = off;
+      if (!live) return;
+      void manageResident(address, { do: "mcp", off })
+        .then(() => store.refresh())
+        .catch(() => {
+          turned = null;
+        });
+    },
+  };
+}
+
+/** The specimen's MCP switches: the account's servers, turned here alone. */
+function specimenServers(): FocusServers {
+  let off: string[] = ["figma"];
+  const login = loginsOf(specimen.world.accounts)[0] ?? null;
+  return { ...serverLists.switches(() => login), off: () => off, changed: (next) => (off = next) };
 }
 
 /** Points the conversation at `address` at machines and folders; what was
@@ -1303,6 +1385,7 @@ function specimenTalk(address: Address): KeepablePage {
         machinesOf(specimen.world).map((machine) => focusPlace(specimen.world, machine)),
       folders: specimenFolders,
       set: () => new Promise((resolve) => setTimeout(() => resolve([]), 600)),
+      servers: specimenServers(),
     },
     opening: { open: notLive, reveal: notLive },
     pictures: {
@@ -1486,6 +1569,7 @@ function liveTalk(address: Address): KeepablePage {
       places: () => focusPlacesFor(address),
       folders: (machine, path) => foldersOf(machine, path),
       set: (focus) => pointAt(address, focus),
+      servers: conversationServers(address),
     },
     // A file elsewhere is brought to this device first; one here opens
     // where it is.
@@ -2001,7 +2085,18 @@ function show(next: Place): void {
         },
       });
       break;
-    case "agents":
+    case "agents": {
+      const section = sectionOf(next) ?? "claude";
+      keepSection(section);
+      const profile = english ? enProfile : zhProfile;
+      if (section === "prompt") {
+        page = new PromptPage({ store, words: profile, head, calls: profileCalls });
+        break;
+      }
+      if (!isHost(section)) {
+        page = new McpPage({ store, words: profile, head, calls: profileCalls, confirm: accountConfirm, close: pageWords.close });
+        break;
+      }
       page = new AgentLoginsPage({
         store,
         words: english ? enAgentLogins : zhAgentLogins,
@@ -2009,11 +2104,25 @@ function show(next: Place): void {
         access: english ? enAccess : zhAccess,
         usage: english ? enUsage : zhUsage,
         head,
+        agent: section,
         machine: next.machine,
-        showing: (machine) => {
-          // The address follows the machine shown, without coming anew.
-          place = { kind: "agents", machine };
+        tab: tabOf(next),
+        prefs: {
+          words: profile,
+          make: (agent) => new HostPrefs({ agent, words: profile, english, calls: profileCalls, models: agentModels }),
+        },
+        tabbed: (tab, agent) => {
+          place = tab === "prefs" ? { kind: "agents", machine: null, section: agent, tab } : { kind: "agents", machine: null, section: agent };
           history.replaceState(history.state, "", link(place));
+          shell.mark(place);
+        },
+        showing: (machine, agent) => {
+          // The address and the sidebar follow the machine and the agent
+          // shown, without coming anew.
+          place = { kind: "agents", section: agent, machine };
+          keepSection(agent);
+          history.replaceState(history.state, "", link(place));
+          shell.mark(place);
         },
         when,
         workbench: deviceFeatures.conversations,
@@ -2034,6 +2143,7 @@ function show(next: Place): void {
         confirm: accountConfirm,
       });
       break;
+    }
     case "usage":
       page = new LoginUsagePage({
         store,

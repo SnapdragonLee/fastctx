@@ -78,6 +78,7 @@ fn residents() -> Vec<ResidentNow> {
                 detail: "cargo test".into(),
             }],
             about: About {
+                mcp_off: Default::default(),
                 id: format!("codex-ab1{i}").parse().unwrap(),
                 host: host(),
                 machine: machine(),
@@ -294,6 +295,7 @@ fn nodes() -> Vec<NodesReply> {
         path_separator: if os == "windows" { '\\' } else { '/' },
         case_sensitive: os != "windows",
         version: "fixture-version".into(),
+        mcp: true,
         completion_receipts: false,
         upload_resumes: false,
         stats: lifetime,

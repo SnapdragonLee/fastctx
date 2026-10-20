@@ -1,9 +1,12 @@
 //! The short-lived helper held by a Claude hook's process stream. It waits
-//! for an answer or a concrete lifecycle event, never for a made-up deadline.
+//! for an answer or a concrete lifecycle event, never for a made-up deadline;
+//! the one bound is how long Claude Code's file may lag behind what its
+//! session holds (`CATCH_UP`).
 
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use fastctx_hosts::claude::control::{self, Answer, Question, Waiting};
 use fastctx_types::ProcessIdentity;
@@ -46,10 +49,13 @@ fn wake(parent: &ProcessIdentity, session: &Path, root: &Path) -> io::Result<()>
     let marker = crate::file_events::named(root)?.join("uninstalled.json");
     let (inbox_seen, controls_seen) = (watched.join("inbox"), watched.join("control").join("inbox"));
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        let Ok(event) = event else {
-            // The watch itself faltered: a look finds whatever is there.
-            let _ = changes.send(Woken::Look);
-            return;
+        let event = match event {
+            Ok(event) if !event.need_rescan() => event,
+            _ => {
+                // A lost notification has no reliable path to filter.
+                let _ = changes.send(Woken::Look);
+                return;
+            }
         };
         // The plugin reads these files when it looks: a read is no news.
         if !crate::file_events::changes(&event) {
@@ -99,6 +105,9 @@ fn wake(parent: &ProcessIdentity, session: &Path, root: &Path) -> io::Result<()>
                 },
             }
         }
+        if root.join("uninstalled.json").try_exists()? {
+            return say("removed");
+        }
         writeln!(out, "look")?;
         out.flush()?;
     }
@@ -121,6 +130,13 @@ pub fn owner(world: &Path) -> io::Result<()> {
 }
 
 /// Waits for the node to identify this session before its system prompt is built.
+/// How long Claude Code's own file may hold fewer messages than its session
+/// does before the policy stops waiting for it. Rows reach the file a moment
+/// after the session holds them, but a message the session keeps only in
+/// memory, as the error a failed request leaves, never does: a session
+/// resumed after one would otherwise wait on its file for good.
+const CATCH_UP: Duration = Duration::from_secs(10);
+
 pub fn policy(world: &Path, session: &str, messages: Option<usize>, after_compact: Option<&str>) -> io::Result<()> {
     crate::claude::pairing::validate_session(session)?;
     let directory = world.join("claude").join(session);
@@ -146,6 +162,7 @@ pub fn policy(world: &Path, session: &str, messages: Option<usize>, after_compac
         let _ = sender.send(fastctx_platform::host_process::wait_for_exit(&controller).map(|()| true));
     });
     let mut transcript_watched = false;
+    let mut behind_since: Option<Instant> = None;
     loop {
         if messages.is_some()
             && let Some(host) = control::host(&directory)?
@@ -197,7 +214,9 @@ pub fn policy(world: &Path, session: &str, messages: Option<usize>, after_compac
                             "the native file has more context than the mod's observed prefix",
                         ));
                     }
-                    Ok(_) => {}
+                    Ok(_) => {
+                        behind_since.get_or_insert_with(Instant::now);
+                    }
                     Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::Interrupted) => {}
                     Err(error) => return Err(error),
                 }
@@ -205,7 +224,23 @@ pub fn policy(world: &Path, session: &str, messages: Option<usize>, after_compac
                 return output(&policy);
             }
         }
-        if receiver.recv().map_err(io::Error::other)?? {
+        let heard = match behind_since {
+            Some(since) => {
+                let Some(left) = CATCH_UP.checked_sub(since.elapsed()) else {
+                    return Err(io::Error::other(format!(
+                        "the native file still holds less context than the mod's {} observed messages",
+                        messages.unwrap_or_default()
+                    )));
+                };
+                match receiver.recv_timeout(left) {
+                    Ok(heard) => heard,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(error) => return Err(io::Error::other(error)),
+                }
+            }
+            None => receiver.recv().map_err(io::Error::other)?,
+        };
+        if heard? {
             return Err(io::Error::other("the World node exited before identifying this Claude session"));
         }
     }

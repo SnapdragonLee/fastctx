@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::calls::Call;
 use crate::file_search::FileSearchRequest;
 use crate::lines::Request as Lines;
+use crate::mcp::McpCall;
 use crate::remote::RemoteCall;
 use crate::update::UpdateCall;
 
@@ -101,6 +102,14 @@ impl RemoteCall {
     /// What this call is (`Contract`).
     pub fn contract(&self) -> Contract {
         match self {
+            Self::Mcp { mcp: crate::mcp::MachineCall::Status { .. } | crate::mcp::MachineCall::Found } => {
+                Contract::QUERY
+            }
+            Self::Mcp { mcp: crate::mcp::MachineCall::Keep { .. } | crate::mcp::MachineCall::Import { .. } } => {
+                Contract::CHANGE
+            }
+            Self::Mcp { mcp: crate::mcp::MachineCall::Test { .. } } => Contract::ASKS_AGENT,
+            Self::McpServe { .. } => Contract { cancellable: true, ..Contract::STREAM },
             Self::Who { .. }
             | Self::Since { .. }
             | Self::Folders { .. }
@@ -231,8 +240,11 @@ impl Call {
     /// (`Leaving`).
     pub fn on_leaving(&self) -> Leaving {
         match self {
-            Self::MachineLog { .. }
+            Self::McpRelay { .. }
+            | Self::MachineLog { .. }
             | Self::CollabRead { .. }
+            | Self::ProfileRead { .. }
+            | Self::Mcp { mcp: McpCall::List | McpCall::Test { .. } | McpCall::Found { .. }, .. }
             | Self::Features { .. }
             | Self::WatchFeatures { .. }
             | Self::WorldNow { .. }
@@ -270,6 +282,8 @@ impl Call {
                 ..
             }
             | Self::CollabWrite { .. }
+            | Self::ProfileWrite { .. }
+            | Self::Mcp { mcp: McpCall::Keep { .. } | McpCall::Remove { .. } | McpCall::Import { .. }, .. }
             | Self::SetFeature { .. }
             | Self::SetLanguage { .. }
             | Self::Reopened { .. }
