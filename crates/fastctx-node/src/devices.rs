@@ -33,7 +33,7 @@ pub fn admit(view: &View, from: &MachineName, call: &RemoteCall) -> Result<(), F
     let device = view.member(from).is_some_and(|member| !member.is_machine());
     let users_own = matches!(
         call,
-        RemoteCall::Talk { .. }
+        RemoteCall::Mcp { .. } | RemoteCall::Talk { .. }
             | RemoteCall::Composer { .. }
             | RemoteCall::Open { .. }
             | RemoteCall::Stop { .. }
@@ -46,7 +46,8 @@ pub fn admit(view: &View, from: &MachineName, call: &RemoteCall) -> Result<(), F
                     | Management::Sleep
                     | Management::Wake
                     | Management::Move { .. }
-                    | Management::Focus { .. },
+                    | Management::Focus { .. }
+                    | Management::Mcp { .. },
                 ..
             }
             | RemoteCall::Offers { .. }

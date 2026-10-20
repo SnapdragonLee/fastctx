@@ -89,7 +89,7 @@ fn made(
         let expired = crate::assists::end_due(&mut store, Timestamp::now())
             .map_err(|error| format!("the hub could not end an assistance past its deadline: {error}"))?;
         let before = store.book.clone();
-        let action = crate::machine_log::action(&change, &before);
+        let action = crate::machine_log::action(&change, &before, &store.hub.updates);
         let authenticated = may_change(&before.directory, &change, asker, account);
         let actor = Actor { account: Some(account.clone()), authenticated, member: Some(asker.clone()), peer: None };
         let before_hub = store.hub.clone();
@@ -108,6 +108,7 @@ fn made(
             crate::machine_log::effects(&mut store, &before.directory, &actor, &action)?;
             let committed = match &told {
                 Told::CollabWritten { version } => fastctx_types::machine_log::Action::Collab { version: *version },
+                Told::ProfileWritten { version } => fastctx_types::machine_log::Action::Profile { version: *version },
                 _ => action.clone(),
             };
             crate::machine_log::keep(&mut store, &before.directory, actor.clone(), committed, Outcome::Done)?;
@@ -195,6 +196,38 @@ fn apply(
             let version = collab.version;
             found.collab = Some(collab);
             Ok(Told::CollabWritten { version })
+        }
+        Change::Profile { mut profile } => {
+            profile.validate()?;
+            let directory = &store.book.directory;
+            let current = directory.account(account).expect("checked").profile.clone().unwrap_or_default();
+            // A server a command starts is kept on a machine the account may
+            // run commands on; one it was given before stays until removed.
+            for (name, entry) in &mut profile.servers {
+                let fastctx_types::profile::Entry::Command { machine } = entry else { continue };
+                let kept = matches!(
+                    current.servers.get(name),
+                    Some(fastctx_types::profile::Entry::Command { machine: before }) if before == machine
+                );
+                if kept {
+                    continue;
+                }
+                if !directory.rights(account, machine).hands {
+                    return Err(format!("{account} may not run commands on {machine}"));
+                }
+                *machine = directory.canonical(machine).clone();
+            }
+            if profile.version != current.version {
+                return Err(format!(
+                    "the profile changed: version {} was read, current version is {}",
+                    profile.version, current.version
+                ));
+            }
+            profile.version = current.version.checked_add(1).ok_or("the profile version cannot be incremented")?;
+            let version = profile.version;
+            let found = store.book.directory.accounts.iter_mut().find(|found| found.name == *account).expect("checked");
+            found.profile = Some(profile);
+            Ok(Told::ProfileWritten { version })
         }
         Change::Share { machine, to, shared } => {
             let directory = &mut store.book.directory;
@@ -412,6 +445,7 @@ fn apply(
                 locked: false,
                 opened: Timestamp::now(),
                 collab: None,
+                profile: None,
                 promotion: false,
             });
             Ok(Told::Done)
@@ -496,7 +530,24 @@ fn apply(
             {
                 return Err(format!("{minimum} is not a version a release can have"));
             }
-            store.hub.updates = policy;
+            // The ceiling on intake is its own change: an interface that
+            // sets the rest knows nothing of it.
+            let intake = store.hub.updates.intake;
+            store.hub.updates = fastctx_types::update::Policy { intake, ..policy };
+            store.save_hub().map_err(|error| format!("the hub could not keep its settings: {error}"))?;
+            Ok(Told::Done)
+        }
+        Change::Intake { rate } => {
+            need_super()?;
+            let range = fastctx_types::update::INTAKE_RANGE;
+            if rate.is_some_and(|rate| !range.contains(&rate)) {
+                return Err(format!(
+                    "the hub takes packages in at {} to {} bytes a second",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            store.hub.updates.intake = rate;
             store.save_hub().map_err(|error| format!("the hub could not keep its settings: {error}"))?;
             Ok(Told::Done)
         }
@@ -684,7 +735,7 @@ fn may_change(
     account: &AccountName,
 ) -> bool {
     match change {
-        Change::OpenProject { .. } => directory.may_act_for(account, asker),
+        Change::OpenProject { .. } | Change::Profile { .. } => directory.may_act_for(account, asker),
         _ => directory.logged_in(asker, account),
     }
 }

@@ -31,6 +31,11 @@ pub enum Action {
     Collab {
         version: u64,
     },
+    /// The account's own configuration was written; what it says is not
+    /// kept here.
+    Profile {
+        version: u64,
+    },
     Share {
         machine: MachineName,
         to: AccountName,
@@ -174,6 +179,10 @@ pub enum Action {
         /// 1.0.1 beta 3, which always did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         managed_auto: Option<bool>,
+        /// How fast the hub takes packages in at most, in bytes a second,
+        /// when that is what was set; the rest is the policy as it stood.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intake: Option<u64>,
     },
     /// `machine`, away, is to update to `version` once it is back; none,
     /// what was kept for it was taken back.
@@ -307,6 +316,7 @@ impl Action {
             Self::Updates { .. } => Needs::Versions,
             Self::UpdateDue { .. } | Self::Updated { .. } | Self::UninstallLeft { .. } => Needs::Due,
             Self::DeleteProject { .. } => Needs::ProjectDeletes,
+            Self::Profile { .. } => Needs::Profiles,
             Self::Collab { .. }
             | Self::Share { .. }
             | Self::Assist { .. }
@@ -360,6 +370,9 @@ pub enum Needs {
     /// A reader of the records of projects deleted, which came in
     /// 1.0.1-beta.6.
     ProjectDeletes,
+    /// A reader of the records of profiles written, which came in
+    /// 1.0.1-beta.7.
+    Profiles,
 }
 
 /// What one reader of the machine log says it reads.
@@ -370,6 +383,7 @@ pub struct Reads {
     pub versions: bool,
     pub due: bool,
     pub project_deletes: bool,
+    pub profiles: bool,
 }
 
 impl Reads {
@@ -382,6 +396,7 @@ impl Reads {
             Needs::Versions => self.versions,
             Needs::Due => self.due,
             Needs::ProjectDeletes => self.project_deletes,
+            Needs::Profiles => self.profiles,
         }
     }
 }

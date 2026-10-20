@@ -58,6 +58,8 @@ pub fn fixtures() -> Fixtures {
             is_default: true,
             default_reasoning_effort: "medium".into(),
             reasoning_efforts: vec![ReasoningEffort { effort: "medium".into(), description: "Example effort".into() }],
+            context_window: Some(272_000),
+            max_context_window: Some(872_000),
         }]),
         integration: Fact::known(Integration::In),
         unattended: Fact::known(true),
@@ -146,6 +148,7 @@ pub fn fixtures() -> Fixtures {
                 reasoning_effort: Some("medium".into()),
                 attachments: Vec::new(),
                 choices: fastctx_types::agents::Choices {
+                    mcp_off: Default::default(),
                     account: Some(fastctx_types::access::HubAccount {
                         hub: "w-0123456789abcdef".parse().unwrap(),
                         account: "ada".parse().unwrap(),
@@ -215,6 +218,7 @@ pub fn fixtures() -> Fixtures {
         remote_calls: vec![
             RemoteCall::Agents,
             RemoteCall::Open {
+                mcp_off: Default::default(),
                 agent: "claude".parse().unwrap(),
                 town: None,
                 text: "First words".into(),
