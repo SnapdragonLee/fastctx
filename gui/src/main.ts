@@ -54,7 +54,7 @@ import { ProjectActs, enProjectActs, zhProjectActs } from "./app/project-acts";
 import { enMe, zhMe } from "./app/me-words";
 import { enPeople, zhPeople } from "./app/people-words";
 import { LoginPage } from "./app/login";
-import { MachinesPage, showUpdatesNext } from "./app/machines";
+import { MachinesPage } from "./app/machines";
 import { AgentLoginsPage } from "./app/agent-logins";
 import { LoginUsagePage } from "./app/usage/login-page";
 import { enUsage, zhUsage } from "./app/usage/words";
@@ -71,11 +71,15 @@ import { isHost, keepSection, sectionOf, tabOf } from "./app/agent-sections";
 import "./app/agent-sections.css";
 import { PromptPage } from "./app/prompt-page";
 import { HostPrefs } from "./app/host-prefs";
+import { SubagentsTab } from "./app/subagents-tab";
+import { profileSubagents } from "./world/subagents";
+import { specimenSubagents } from "./specimen/subagents";
 import { ProfileDefaults } from "./app/profile-defaults";
 import { McpPage } from "./app/mcp-page";
 import type { ProfileCalls } from "./app/profile-account";
 import "./app/profile.css";
 import "./app/host-prefs.css";
+import "./app/subagents.css";
 import { mcp as mcpCall, readProfile, writeProfile } from "./world/profile";
 import { specimenProfileCalls } from "./specimen/profile";
 import { ServerLists } from "./app/mcp-switches";
@@ -127,7 +131,7 @@ import { TalkActs } from "./app/talk-acts";
 import { TalkMenu } from "./app/talk-menu";
 import { enTalkMenu, zhTalkMenu } from "./app/talk-menu-words";
 import { TalkToast } from "./app/talk-toast";
-import type { Controlled } from "./world/control";
+import type { Controlled, PendingControl } from "./world/control";
 import { escape as escapeText } from "./conversation/prose";
 import {
   enComposer,
@@ -154,12 +158,12 @@ import {
 import { enRemoval, zhRemoval } from "./app/removal-words";
 import { enAccess, enLogin, enMachines, enToken, zhAccess, zhLogin, zhMachines, zhToken } from "./app/account-words";
 import { LASTING, loginsOf, type AccountChange, type Login, type TokenSeen, type TokenWay } from "./world/accounts";
-import { assistantOf, assistantsOf, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
+import { assistantOf, assistantsOf, assistingOwner, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
 import type { FocusPlace } from "./app/focus-panel";
 import { folders as foldersOf, noFocus, type Focus, type Folders } from "./world/focus";
 import { ComposerSession } from "./conversation/composer";
 import { allowPrivacy, attachmentThumbnail, fetchAttachment, fetchFile, openLocal, reveal, saveAs, thumbnail, thumbnailUrl, type Saved, type Thumbnail } from "./world/files";
-import { specimenComposer } from "./specimen/composer";
+import { specimenComposer, type SpecimenComposer } from "./specimen/composer";
 import { ClaudeConsent } from "./app/claude-consent";
 import { Conversation } from "./conversation/conversation";
 import { LocalTranscript } from "./specimen/transcript";
@@ -171,6 +175,7 @@ import { redrawDiagrams } from "./conversation/diagrams";
 import { HomePage } from "./home/page";
 import type { Away, Happening, WorldState } from "./home/model";
 import { happeningsOf } from "./home/since";
+import type { SinceEvent } from "./world/since";
 import { enHome, zhHome } from "./home/words";
 import { installHints } from "./app/hint";
 import { installSheetDrag } from "./app/sheet-drag";
@@ -378,6 +383,8 @@ const profileCalls: ProfileCalls = {
   },
 };
 const serverLists = new ServerLists(profileCalls, store, english ? enProfile : zhProfile);
+/** The account's Claude subagents: the World's, or the specimen's. */
+const subagentCalls = live ? profileSubagents : specimenSubagents(params.get("subagents") === "older");
 
 /** The models an agent's logins offer across the machines this computer
  *  reaches, each once, in the order the first machine to list it gave. */
@@ -708,7 +715,7 @@ const tokens = new Tokens({
       : specimenCode(login, kind === "phone" ? "scan" : "paste", kind, asked),
   server: (login, asked) =>
     live
-      ? serverCommand(login.hubName, login.account, asked.name, codeExpires(asked), asked.managed, asked.uses === 1 ? null : asked.uses, asked.label, asked.windows ?? false)
+      ? serverCommand(login.hubName, login.account, asked.name, codeExpires(asked), asked.managed, asked.uses === 1 ? null : asked.uses, asked.label, asked.windows ?? false, asked.mac ?? false)
       : specimenCode(login, "line", "computer", asked).then(() => "echo 'Specimen: no real token or download'"),
   codes: (login) => codesOf(store.world.peek()?.accounts.hubs.find((hub) => hub.hub === login.hub), login, new Date()),
   revoke: revokeCode,
@@ -763,7 +770,6 @@ const projectActs = new ProjectActs({
     const world = store.world.peek();
     return [...residentsOf(world, true), ...unreachedOf(world, true)].filter((r) => r.town === town);
   },
-  forget: (r) => talkActs.delete(r),
   deleted: (town) => {
     // A page of the project deleted is left for the front page.
     const at = placeOf(location.hash);
@@ -784,6 +790,8 @@ const talkMenu = new TalkMenu({
   acts: talkActs,
   towns: townsOn,
   reachable: (r) => !isUnreached(r),
+  someone: (r) => someoneSaid(r),
+  place: (r) => placeSaid(r),
   askDelete: (r, then) => askForget(r, then),
 });
 effect(() => {
@@ -802,13 +810,26 @@ const forgetConfirm = new Confirm({ close: talkMenuWords.cancel, working: talkMe
 /** Asks before a conversation is deleted everywhere: what goes, and that it
  *  is stopped first or deleted once its machine is back where so; `then`
  *  once it is asked. */
+/** Who a conversation is with, where it has no name of its own: the agent
+ *  on its machine, or for one assisting the user, whose agent, never the
+ *  computer it runs on (`world-network.md`, 共享机器与智能体协助). */
+function someoneSaid(r: ResidentNow, said: { someone(agent: string, machine: string): string; someoneAssisting(agent: string, owner: string): string } = shellWords): string {
+  const agent = agentName(r.about.host.agent);
+  const owner = assistingOwner(store.world.peek(), r.about.machine);
+  return owner !== null ? said.someoneAssisting(agent, owner) : said.someone(agent, r.about.machine);
+}
+
+/** Where a conversation is said to be: its machine, or whose agent it is. */
+function placeSaid(r: ResidentNow): string {
+  return assistingOwner(store.world.peek(), r.about.machine) !== null ? someoneSaid(r) : r.about.machine;
+}
+
 function askForget(r: ResidentNow, then?: () => void): void {
   const words = talkMenuWords;
   const shown = talkActs.view(r);
-  const agent = agentName(r.about.host.agent);
-  const name = titleOf(shown) ?? `${agent} ${r.about.machine}`;
+  const name = titleOf(shown) ?? someoneSaid(r);
   const working = !isUnreached(r) && (r.now?.activity === "busy" || !!r.now?.turn);
-  const also = [working ? words.deleteWorking : "", isUnreached(r) ? words.deleteAway(r.about.machine) : ""].filter(Boolean);
+  const also = [working ? words.deleteWorking : "", isUnreached(r) ? words.deleteAway(placeSaid(r)) : ""].filter(Boolean);
   forgetConfirm.ask({
     title: words.deleteTitle(name),
     what: words.deleteWhat,
@@ -966,16 +987,38 @@ const updateCard = new UpdateCard(appUpdates, updateWords, live ? !onComputer() 
   // for may update, that can take a newer version.
   count: async () => {
     const world = store.world.peek();
+    // Every login's view, each machine counted once.
+    const able = new Set<string>();
     for (const login of loginsOf(world?.accounts)) {
-      const reply = await askUpdatesView(login.hub, login.account, { do: "view" }).catch(() => null);
-      if (reply?.kind === "view") return reply.view.machines.filter((one) => one.machine !== world?.here && one.offer && one.actions.update.allowed).length;
+      const reply = await askUpdatesView(login.hubName, login.account, { do: "view" }).catch(() => null);
+      if (reply?.kind !== "view") continue;
+      for (const one of reply.view.machines) if (one.machine !== world?.here && one.offer && one.actions.schedule.allowed) able.add(one.machine);
     }
-    return 0;
+    return able.size;
   },
   open: () => {
-    showUpdatesNext();
-    location.hash = link({ kind: "machines" });
+    location.hash = link({ kind: "machines", updates: true });
   },
+}, {
+  versions: (look) => versionsHere(look),
+  relays: live ? onComputer() : !params.has("phone"),
+  // The World's program here: put in place by the interface's, then the
+  // node asked to hand over to it.
+  renewing: live
+    ? onComputer()
+      ? {
+          state: renewalState,
+          renew: async () => {
+            await placeFastctx();
+            await renewHere();
+          },
+          guardian: renewGuardianHere,
+        }
+      : null
+    : params.has("phone")
+      ? null
+      : specimenComputer().renewing,
+  settings: english ? enSettings : zhSettings,
 });
 const versionWindow = new VersionWindow(updateWords.versions);
 // A picture attached and not yet sent opens in the same viewer as the
@@ -1066,6 +1109,7 @@ function stateOf(world: WorldNow, away: Away | null): WorldState {
     known: [...residentsOf(world, true), ...unreachedOf(world, true)],
     others: world.who.others ?? [],
     nodes: machinesOf(world),
+    assisting: new Map(assistantsOf(world).map((one) => [one.machine, one.owner ?? ""])),
     towns: world.towns,
     away,
   };
@@ -1140,7 +1184,7 @@ function windowDrops(on: { over(over: boolean): void; dropped(paths: string[]): 
 function exported(conversation: Conversation, someone: Someone): () => Promise<string> {
   return () =>
     markdownOf(conversation, words, {
-      title: conversation.title ?? `${someone.agent} ${someone.machine}`,
+      title: conversation.title ?? (someone.assistFrom ? shellWords.someoneAssisting(someone.agent, someone.assistFrom) : `${someone.agent} ${someone.machine}`),
       agent: someone.agent,
       you: homeWords.you,
       plan: words.plan,
@@ -1152,7 +1196,7 @@ function exported(conversation: Conversation, someone: Someone): () => Promise<s
  *  id where it does not. */
 function someoneAt(address: Address): string {
   const known = listedAt(store.world.peek(), address);
-  return known ? shellWords.someone(agentName(known.about.host.agent), known.about.machine) : `${address.resident} ${address.machine}`;
+  return known ? someoneSaid(known) : `${address.resident} ${address.machine}`;
 }
 
 /** The card about the agent in a conversation, and how to fill it. */
@@ -1285,6 +1329,7 @@ function home(): Page {
     head: head(""),
     newTalk: () => beginTalk(),
     stopJob: live ? (job, machine) => stopJob(job, machine) : async () => {},
+    updates: () => updateCard.open(),
     // An answer from here goes in once, however long the way is closed, as
     // one from a notification does (`world-network.md`, 断开不是结束).
     answer: (address, asked, choice) => {
@@ -1296,10 +1341,13 @@ function home(): Page {
   let away: Away | null = live ? null : specimen.away;
   // What happened while the reader was away is asked of every machine when
   // the page opens, and again whenever the present changes in a way that
-  // leaves something to tell; one question at a time.
+  // leaves something to tell; one question at a time. Asked again, only
+  // what came after the last reading began is read, and added to what was:
+  // whole again where a machine did not answer, or a new one is there.
   let shape = "";
   let asking = false;
   let again = false;
+  let heard: { events: Map<string, SinceEvent>; machines: string; from: Date } | null = null;
   const ask = async (): Promise<void> => {
     if (!lastVisit) return;
     if (asking) {
@@ -1308,7 +1356,17 @@ function home(): Page {
     }
     asking = true;
     try {
-      const read = happeningsOf(await since(lastVisit, null));
+      const known = heard;
+      const answer = await since(known?.from ?? lastVisit, null);
+      const answered = answer.machines.flatMap((machine) => (machine.kind === "answered" ? [machine.reply] : []));
+      const machines = answer.machines.map((machine) => (machine.kind === "answered" ? machine.reply.machine : machine.machine)).sort().join(" ");
+      const events = new Map(known && known.machines === machines ? known.events : []);
+      for (const event of answer.events) events.set(event.id, event);
+      const whole = answered.length === answer.machines.length && (!known || known.machines === machines);
+      const began = Math.min(...answered.map((reply) => Date.parse(reply.read_started_at)));
+      heard = whole && Number.isFinite(began) ? { events, machines, from: new Date(Math.max(lastVisit.getTime(), began - 2000)) } : null;
+      if (known && known.machines !== machines) again = true;
+      const read = happeningsOf({ ...answer, events: [...events.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)) });
       away = { happenings: await withFirstLines(read.happenings), unasked: read.unasked, trouble: null };
     } catch (error) {
       away = { happenings: away?.happenings ?? [], unasked: [], trouble: String(error) };
@@ -1355,6 +1413,11 @@ function home(): Page {
 }
 
 function specimenTalk(address: Address): KeepablePage {
+  let queuedHere: PendingControl[] = [];
+  // The shared input kept in the page; `?queued` puts two in its queue.
+  let shared: SpecimenComposer | null = null;
+  const sharedInput = () =>
+    (shared ??= specimenComposer(address, () => conversation.turning(), params.has("queued") ? (english ? ["Then run the overflow test on lab", "And write the result into the journal"] : ["然后在 lab 上跑溢出测试", "再把结果写进手记"]) : []));
   const name = address.resident;
   const sample: Specimen & { later?: SessionEvent[]; rate?: number; timed?: boolean } = name.startsWith("stream")
     ? streamSpecimen(params)
@@ -1414,8 +1477,23 @@ function specimenTalk(address: Address): KeepablePage {
     },
     controls: {
       words: composerWords,
-      offers: async () => (sample.agent === "claude" ? specimenClaudeOffers : specimenOffers),
-      control: async () => ({ kind: "done", said: english ? "this is a specimen" : "这是样例，没有连着世界" }),
+      // A compaction asked for here waits for a turn's end, as one asked
+      // mid-turn does, so its line above the input can be looked at.
+      offers: async () => ({ ...(sample.agent === "claude" ? specimenClaudeOffers : specimenOffers), control_queue: true, pending_controls: queuedHere }),
+      control: async (what) => {
+        if (what.do === "cancel_control") {
+          queuedHere = queuedHere.filter((row) => row.id !== what.id);
+          shared?.forget(what.id);
+          return { kind: "done", said: null };
+        }
+        if (what.do === "compact" || (what.do === "command" && what.name === "compact")) {
+          const id = `control-${Date.now()}-${queuedHere.length + 1}-0`;
+          queuedHere = [...queuedHere, { id, control: what, at: new Date().toISOString(), state: "waiting" }];
+          shared?.place(id);
+          return { kind: "reported", said: "Waiting for the current turn to end.", queued: id };
+        }
+        return { kind: "done", said: english ? "this is a specimen" : "这是样例，没有连着世界" };
+      },
       forked: () => {},
       open: openOutside,
     },
@@ -1439,11 +1517,7 @@ function specimenTalk(address: Address): KeepablePage {
       },
     },
     draftKey: `draft:${address.resident}@${address.machine}`,
-    // The shared input kept in the page; `?queued` puts two in its queue.
-    composer: () =>
-      ComposerSession.open(address, {
-        transport: specimenComposer(address, () => conversation.turning(), params.has("queued") ? (english ? ["Then run the overflow test on lab", "And write the result into the journal"] : ["然后在 lab 上跑溢出测试", "再把结果写进手记"]) : []),
-      }),
+    composer: () => ComposerSession.open(address, { transport: sharedInput() }),
     files: { words: composerWords.files, find: specimenFiles },
     manage: talkManage(address, () => page, exported(conversation, { agent: sample.agent === "claude" ? "Claude" : "Codex", machine: sample.machine, model: sample.model, project: sample.town })),
     send(text, attached) {
@@ -1853,6 +1927,7 @@ function projectPage(town: string): Page {
   const page = new ProjectPage({
     words: projectWords,
     home: homeWords,
+    someone: (r) => someoneSaid(r, homeWords),
     town,
     head,
     newTalk: shellWords.newTalk,
@@ -2049,7 +2124,7 @@ function show(next: Place): void {
         name,
         when,
         ago: (ms) => homeWords.ago(ms),
-        stats: (machine, after) => (live ? machineStats(machine, after) : specimenStats(machine, after)),
+        stats: (machine, after, seen) => (live ? machineStats(machine, after, seen) : specimenStats(machine, after)),
         nameProblem: (text) => (live ? nameProblem("machine", text) : specimenNameProblem("machine", text)),
         change,
         log: live ? machineLog : specimenMachineLog,
@@ -2065,8 +2140,7 @@ function show(next: Place): void {
           state: appUpdates.state,
           machine: updateOlderMachine,
           remote: (name, call) => updatesAsked.remote(name, call),
-          versions: versionWindow,
-          versionsHere,
+          here: () => updateCard.open(),
           words: updateWords,
           view: english ? enUpdateView : zhUpdateView,
         },
@@ -2095,6 +2169,7 @@ function show(next: Place): void {
         people: english ? enPeople : zhPeople,
         head,
         focus: next.focus ?? null,
+        ticked: !!next.updates,
         when,
         change,
         invite: (login) => tokens.open(login),
@@ -2157,8 +2232,19 @@ function show(next: Place): void {
           words: profile,
           make: (agent) => new HostPrefs({ agent, words: profile, english, calls: profileCalls, models: agentModels }),
         },
+        subagents: {
+          make: () =>
+            new SubagentsTab({
+              words: profile,
+              english,
+              call: subagentCalls,
+              models: () => agentModels("claude"),
+              confirm: accountConfirm,
+              close: pageWords.close,
+            }),
+        },
         tabbed: (tab, agent) => {
-          place = tab === "prefs" ? { kind: "agents", machine: null, section: agent, tab } : { kind: "agents", machine: null, section: agent };
+          place = tab === "logins" ? { kind: "agents", machine: null, section: agent } : { kind: "agents", machine: null, section: agent, tab };
           history.replaceState(history.state, "", link(place));
           shell.mark(place);
         },
@@ -2365,8 +2451,7 @@ function show(next: Place): void {
           updates: appUpdates,
           words: updateWords,
           view: english ? enUpdateView : zhUpdateView,
-          versions: versionsHere,
-          relays: live ? onComputer() : !params.has("phone"),
+          open: () => updateCard.open(),
         },
         notifyChanged: (on) => {
           if (live && onPhone()) void configurePhone(presenceWords, on).catch((error: unknown) => console.error("telling the phone its calls", error));
@@ -2546,8 +2631,8 @@ new Palette({
         .filter((r) => r.here || r.now?.waiting_for_user)
         .map((r) => ({
           group: paletteWords.agents,
-          label: titleOf(r) ?? shellWords.someone(agentName(r.about.host.agent), r.about.machine),
-          note: [titleOf(r) ? shellWords.someone(agentName(r.about.host.agent), r.about.machine) : null, r.town].filter(Boolean).join(" "),
+          label: titleOf(r) ?? someoneSaid(r),
+          note: [titleOf(r) ? someoneSaid(r) : null, r.town].filter(Boolean).join(" "),
           run: go({ kind: "talk", address: { resident: r.about.id, machine: r.about.machine } }),
         })),
       ...(inNoNetwork(world) ? [] : machinesOf(world)).map((machine) => ({
@@ -2687,7 +2772,7 @@ if (live && onPhone()) {
 startPresence({
   store,
   words: presenceWords,
-  someone: (r) => shellWords.someone(agentName(r.about.host.agent), r.about.machine),
+  someone: (r) => someoneSaid(r),
   stop: (address) => stop(address),
   // An answer from a notification goes in once, however long the way is
   // closed (`world-network.md`, 断开不是结束).

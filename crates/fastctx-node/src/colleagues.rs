@@ -126,7 +126,7 @@ async fn ask_for_account(
         )));
     }
     let here = node.machine();
-    if node.is_me(&machine) {
+    if link.view().is_me(&machine) {
         let acting = Acting::one(link.membership().id.clone(), account.clone());
         let address = Address { machine: here.clone(), resident: request.about.id.clone() };
         let id = ask_here(node, address, acting, call_town, request.label, request.prompt, started).await?;
@@ -204,11 +204,17 @@ pub async fn ask_here(
     let (spec, heard) = thread_spec(node, &id, &origin, town.as_ref(), &acting, home.as_deref()).await?;
     // Until it is claimed below, reports of threads nobody claims are kept.
     let _starting = crate::codex::starting(node);
-    let (thread, model) = node.codex.home(home.as_deref())?.start_thread(spec).await.map_err(|error| {
-        Failure::new(format!("starting Codex on {}, where colleagues live: {error}", node.machine()))
-    })?;
+    let (thread, model) = node
+        .codex
+        .session(home.as_deref(), crate::assists::host::kept(node, &id)?.unwrap_or(false))?
+        .start_thread(spec)
+        .await
+        .map_err(|error| {
+            Failure::new(format!("starting Codex on {}, where colleagues live: {error}", node.machine()))
+        })?;
     let born_at = Timestamp::now();
     let about = About {
+        forked_from: None,
         mcp_off: Default::default(),
         id: id.clone(),
         host: Host { agent, client: "codex app-server".to_string(), version: String::new() },
@@ -306,7 +312,7 @@ pub async fn ask_here(
 /// its own name. Also what it is told of its town by that. `home` is the
 /// Codex login it is of, none for the default one here; a login assisting
 /// another account goes without the hands that work this machine's screen
-/// and browser (`codex::assisting`).
+/// and browser, and has its own instruction and extension home.
 pub async fn thread_spec(
     node: &Arc<Node>,
     id: &ResidentId,
@@ -316,7 +322,13 @@ pub async fn thread_spec(
     home: Option<&std::path::Path>,
 ) -> Result<(ThreadSpec, Heard), Failure> {
     let here = node.machine();
-    let cwd = standing(node, town)?;
+    crate::profile::session::ready(node, acting).await?;
+    let assisting = crate::assists::host::starting(node, id, acting)?;
+    let host = node.codex.session(home, assisting)?;
+    let cwd = match host.assisted_cwd() {
+        Some(cwd) => cwd.to_path_buf(),
+        None => standing(node, town)?,
+    };
     let binary = node.fastctx.clone();
     let address = Address { machine: here.clone(), resident: id.clone() };
     let env = vec![
@@ -334,16 +346,23 @@ pub async fn thread_spec(
             None
         }
     };
-    crate::profile::session::ready(node, acting).await?;
     let mut config = codex::world_tools(&binary, &env, &tools, fastctx_hands::run::window::BUDGET);
     let started = crate::collab::started(node, id)?;
-    if started.as_ref().is_some_and(|started| !started.callee.screen) || node.works_here(acting).is_err() {
+    if !assisting && started.as_ref().is_some_and(|started| !started.callee.screen) {
         let config_home = home.unwrap_or_else(|| node.codex.default().config_home());
         let (servers, plugins) = codex::desktop_hands(config_home).map_err(Failure::new)?;
-        codex::assisting(&mut config, &servers, &plugins);
+        codex::without_desktop(&mut config, &servers, &plugins);
     }
     let user_mcp = crate::profile::session::codex(node, id, acting, &mut config)?;
     crate::session_options::configure(&mut config, crate::session_options::read(node, id)?);
+    let user_mcp = if assisting {
+        let world = config["mcp_servers"][codex::SERVER_NAME].clone();
+        config["mcp_servers"] = serde_json::json!({ codex::SERVER_NAME: world });
+        codex::assisted::configure_thread(&mut config);
+        Default::default()
+    } else {
+        user_mcp
+    };
     let (mut developer_instructions, heard) = instructions(node, id, town, origin, acting, true).await?;
     // The machines and folders the user pointed it at, in the words its
     // thread started with, each time it is resumed (`crate::focus`).
@@ -413,13 +432,7 @@ pub(crate) async fn instructions(
 ) -> Result<(String, Heard), Failure> {
     let mut heard =
         heard_now(node, town).map_err(|error| Failure::new(format!("reading the town's ledger: {error}")))?;
-    // An agent assisting another account is told where its home is
-    // (`world-run.md`, 这里).
-    let assisting = crate::assists::assisting(node, acting).then(|| {
-        let (_, others, _) = crate::world::grouped_machines(node, acting, true);
-        fastctx_hands::assist::assisting(!others.is_empty())
-    });
-    let words = words(id, &node.machine(), assisting.as_deref(), town, origin, record);
+    let words = words(id, town, origin, record);
     let prompt = crate::profile::session::prompt(node, acting);
     heard.user_prompt = Some(crate::profile::session::hash(&prompt));
     let words = if record && !prompt.is_empty() {
@@ -428,22 +441,13 @@ pub(crate) async fn instructions(
         words
     };
     let text = match town {
-        Some(town) if record => format!("{words}\n\n{}", crate::town::map::brief(node, town).await?),
+        Some(town) if record => format!("{words}\n\n{}", crate::town::map::brief(node, town, acting).await?),
         _ => words,
     };
     Ok((text, heard))
 }
 
-/// `assisting` is what an agent assisting another account is told besides
-/// (`fastctx_hands::assist`).
-fn words(
-    id: &ResidentId,
-    machine: &MachineName,
-    assisting: Option<&str>,
-    town: Option<&TownName>,
-    origin: &Origin,
-    record: bool,
-) -> String {
+fn words(id: &ResidentId, town: Option<&TownName>, origin: &Origin, record: bool) -> String {
     let given = if record { "Its record follows" } else { "Its record comes with your context" };
     let place = match (town, origin) {
         (Some(town), _) => format!(
@@ -459,14 +463,11 @@ fn words(
         ),
         Origin::User => "The user started this session from fastctx and talks to you here.".to_string(),
     };
-    // Many users have this one computer only: other machines are spoken of
-    // as `run`'s description lists them, never assumed.
-    let on =
-        "when `run`'s description lists other machines, `on MACHINE` in the script runs a part of it on one of them";
-    let runs = format!("It runs bash on this machine; {on}");
-    let assisting = assisting.map(|assisting| format!("\n\n{assisting}")).unwrap_or_default();
+    // Where scripts run is said by the machines `run`'s description lists,
+    // never by where the session lives (`world-run.md`, 脚本在哪台机器上跑).
+    let runs = "It runs a bash script on one of the machines its description lists, the script written as one `on MACHINE`";
     format!(
-        "You are {id}, an agent session on {machine}.{assisting}{place}\n\n{working}\n\nWork through the `run` tool; it is your only shell, editor and image viewer. {runs}; `fastctx view` shows files, images and documents, and `edit` and `write` change files. Its description says how. Paths are absolute, each the path on its own machine, written like C:/Users/me on Windows. A script still running when its call stops waiting (15 seconds by default) goes on by itself in the background; when it ends you are told automatically, with its exit status and last lines, while you work or after you end your turn."
+        "You are {id}, an agent session.{place}\n\n{working}\n\nWork through the `run` tool; it is your only shell, editor and image viewer. {runs}; `fastctx view` shows files, images and documents, and `edit` and `write` change files. Its description says how. Paths are absolute, each the path on its own machine, written like C:/Users/me on Windows. A script still running when its call stops waiting (15 seconds by default) goes on by itself in the background; when it ends you are told automatically, with its exit status and last lines, while you work or after you end your turn."
     )
 }
 
@@ -475,7 +476,7 @@ pub async fn message(
     node: &Arc<Node>,
     from: ResidentId,
     to: ResidentId,
-    to_machine: Option<MachineName>,
+    to_machine: Option<Written>,
     text: String,
     login: Option<&fastctx_types::collab::Caller>,
 ) -> Result<(Address, Landed), Failure> {
@@ -483,7 +484,7 @@ pub async fn message(
     let here = node.machine();
     let at = Timestamp::now();
     let machine = match to_machine {
-        Some(machine) => machine.into(),
+        Some(machine) => machine,
         None => locate(node, &from, &to).await?,
     };
     let to = Address { machine: machine.name.clone(), resident: to };
@@ -499,7 +500,7 @@ pub async fn message(
         }
         None => choices.acting,
     };
-    if node.is_me(&to.machine) {
+    if node.is_here(&machine) {
         let (recipient, _) = node
             .residents
             .about(&to.resident)

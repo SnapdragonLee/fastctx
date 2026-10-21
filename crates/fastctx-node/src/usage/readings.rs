@@ -25,22 +25,33 @@ pub(super) fn merge(known: &mut Vec<LimitWindow>, windows: Vec<LimitWindow>) {
             }
             (Some(a), Some(b)) if b < a => {}
             (_, Some(_)) => *old = incoming,
-            _ => old.used_tenths = old.used_tenths.max(incoming.used_tenths),
+            // Without a reset identifier, only a newer observation can establish recovery.
+            (_, None) => *old = incoming,
         }
     }
     known.sort_by(|a, b| a.name.cmp(&b.name).then(a.minutes.cmp(&b.minutes)));
 }
 
-pub(super) fn record(book: &mut Book, path: &Path, incoming: Vec<LimitWindow>, at: Timestamp) -> io::Result<bool> {
+pub(super) fn record(
+    book: &mut Book,
+    path: &Path,
+    incoming: Vec<LimitWindow>,
+    at: Timestamp,
+    account: Option<String>,
+) -> io::Result<bool> {
     if incoming.is_empty() {
         return Ok(false);
     }
-    let mut windows = book.reading.as_ref().map_or_else(Vec::new, |(_, windows)| windows.clone());
-    merge(&mut windows, incoming);
-    if book.reading.as_ref().is_some_and(|(_, old)| *old == windows) {
+    let old = book.readings.get(&account);
+    if old.is_some_and(|(seen, _)| *seen > at) {
         return Ok(false);
     }
-    book.commit(path, Entry::Reading { at, windows })?;
+    let mut windows = old.map_or_else(Vec::new, |(_, windows)| windows.clone());
+    merge(&mut windows, incoming);
+    if windows.iter().all(|window| window.resets_at.is_some()) && old.is_some_and(|(_, old)| *old == windows) {
+        return Ok(false);
+    }
+    book.commit(path, Entry::Reading { at, windows, account })?;
     Ok(true)
 }
 
@@ -51,10 +62,14 @@ pub(super) fn last_reading(node: &Node, path: &Path) -> Option<Reading> {
     })
 }
 
+/// The window of `minutes` that is most used: an account with several
+/// allowances of one length, as Codex's buckets, is held by the tightest.
+pub(super) fn window(windows: &[LimitWindow], minutes: u32) -> Option<&LimitWindow> {
+    windows.iter().filter(|window| window.minutes == Some(minutes)).max_by_key(|window| window.used_tenths)
+}
+
 pub(super) fn week(reading: Option<&Reading>, now: Timestamp) -> Week {
-    let reset = reading
-        .and_then(|(_, windows)| windows.iter().find(|window| window.minutes == Some(10_080)))
-        .and_then(|w| w.resets_at);
+    let reset = reading.and_then(|(_, windows)| window(windows, 10_080)).and_then(|w| w.resets_at);
     let week = SignedDuration::from_secs(super::WEEK_SECONDS);
     match reset {
         Some(mut end) => {
@@ -69,9 +84,15 @@ pub(super) fn week(reading: Option<&Reading>, now: Timestamp) -> Week {
     }
 }
 
-pub(crate) fn codex_reading(node: &Node, dir: &Path, windows: Vec<LimitWindow>, at: Timestamp) -> io::Result<bool> {
+pub(crate) fn codex_reading(
+    node: &Node,
+    dir: &Path,
+    windows: Vec<LimitWindow>,
+    at: Timestamp,
+    account: Option<String>,
+) -> io::Result<bool> {
     let path = super::ledger(node, "codex", dir);
-    super::with_book(node, &path, |book| record(book, &path, windows, at))
+    super::with_book(node, &path, |book| record(book, &path, windows, at, account))
 }
 
 pub(super) fn claude_windows(limits: &[Value]) -> Vec<LimitWindow> {

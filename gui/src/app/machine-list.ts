@@ -166,7 +166,7 @@ export function machineList(now: ListNow, words: MachinesWords): string {
 /** What the update view knows of the machine a node is: a phone by its
  *  name, a machine by the name the network gives it. */
 function updateOf(node: MapNode, machines: Map<string, Machine>, updates: UpdatesNow): MachineUpdate | undefined {
-  return updates.byName.get(machines.get(node.key)?.name ?? node.name);
+  return updates.byName.get(machines.get(node.key)?.written ?? node.name);
 }
 
 /** A mark as a row's cell: what it says, said when pointed at. */
@@ -295,7 +295,8 @@ class Drawing {
       managed ? `<span class="tag" title="${escape(words.managedWhat)}">${escape(words.managed)}</span>` : "",
       node.directAt?.length ? `<span class="ml-direct" title="${escape(words.takesDirect)}">${glyph("link", 14)}</span>` : "",
     ].join("");
-    const agents = assist ? agentsOn(world, node.name) : [];
+    // An assisting machine is named by whose agents; its key keeps the machine.
+    const agents = assist ? agentsOn(world, node.key.slice("assist:".length)) : [];
     const icon: GlyphName = node.device
       ? "phone"
       : assist
@@ -323,7 +324,7 @@ class Drawing {
       : `<span class="ml-pick none" aria-hidden="true"></span>`;
     const title = assist && agents.length ? `${node.title}　${agents.map(agentName).join("、")}` : node.title;
     const go = visitor ? "" : glyph("chevron", 16);
-    const update = now.updates ? updateOf(node, this.machines, now.updates) : undefined;
+    const update = now.updates && !assist ? updateOf(node, this.machines, now.updates) : undefined;
     const inner = now.updates && update
       ? `${node.device ? `<span class="ml-pick none" aria-hidden="true"></span>` : pick}
       ${nameCell(glyph(icon, 15), `<span class="ml-name-text">${escape(node.name)}</span>${tags}`, false)}

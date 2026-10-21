@@ -111,8 +111,7 @@ impl CodexHost {
         if self.running_turn(thread).is_some() {
             return Err("Codex can be compacted only between turns".into());
         }
-        let server = self.server().await?;
-        server.request("thread/compact/start", json!({"threadId":thread})).await?;
+        self.start_control(thread, "thread/compact/start", json!({"threadId":thread})).await?;
         Ok(())
     }
 
@@ -134,7 +133,7 @@ impl CodexHost {
                 service_tier: entry.selection.service_tier.clone().or_else(|| entry.service_tier.clone()),
             }
         };
-        let effective = super::user_config::effective(&server, &spec).await?;
+        let effective = super::user_config::effective(&server, &spec, self.assisted.is_some()).await?;
         let mut config = effective.config;
         if let Some(effort) = &selection.effort {
             config["model_reasoning_effort"] = json!(effort);
@@ -163,6 +162,7 @@ impl CodexHost {
         let choices = spec.choices.clone();
         entry.spec = Some(spec);
         entry.loaded = current;
+        entry.subscribed = current;
         entry.completed_item = true;
         entry.model = model.clone();
         entry.effort = answer.get("reasoningEffort").and_then(Value::as_str).map(str::to_string);
@@ -226,7 +226,16 @@ impl CodexHost {
                 }
             }
             "thread/reverted" => entry.accounting.reloaded(),
-            "thread/started" => entry.metadata = metadata(&params["thread"]),
+            "thread/started" => {
+                entry.metadata = metadata(&params["thread"]);
+                // A thread Codex spawned for another names its model and
+                // effort only here; one started here already has them.
+                let text = |key: &str| params["thread"][key].as_str().map(str::to_string);
+                if entry.model.is_none() {
+                    entry.model = text("model");
+                    entry.effort = text("reasoningEffort");
+                }
+            }
             "thread/tokenUsage/updated" => entry.usage = Some(params["tokenUsage"].clone()),
             "thread/settings/updated" => {
                 entry.model = params.pointer("/threadSettings/model").and_then(Value::as_str).map(str::to_string);

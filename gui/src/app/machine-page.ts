@@ -18,7 +18,7 @@ import { escape } from "../conversation/prose";
 import { loginsOf, names, type AccountChange, type HubAccounts, type Login } from "../world/accounts";
 import type { NameProblem, WorldNow } from "../world/bridge";
 import { agentName, osName, titleOf } from "../world/names";
-import type { Card, MachineStats } from "../world/stats";
+import type { Card, MachineStats, StatsSeen } from "../world/stats";
 import type { MachineFacts } from "../world/world";
 import type { AccessWords, MachinesWords } from "./account-words";
 import { AssistSheet, assistChange, assistancesIn, namesOn, type Assistance } from "./assist-sheet";
@@ -26,7 +26,7 @@ import type { Confirm } from "./confirm";
 import { bytesSaid } from "./data-page";
 import { redrawKeepingFocus } from "./focus";
 import { diskBar, Ring, Spark, Strip, type LineMark, type LineSpan } from "./machine-draw";
-import { daysOf, heldOf, keptOf, SPAN_MS, take, tripsHeld, type Sample } from "./machine-history";
+import { daysOf, heldOf, keptOf, seenOf, SPAN_MS, take, tripsHeld, type Sample } from "./machine-history";
 import type { MachinePageWords } from "./machine-page-words";
 import { FastctxBlock, type FastctxSubject } from "./machine-fastctx";
 import type { ReadLog } from "./machine-log";
@@ -48,7 +48,6 @@ import { effect, type Signal } from "./signals";
 import { newestKnown, type UpdateCall, type UpdateState } from "../world/updates";
 import type { UpdateViewWords } from "./update-view-words";
 import type { UpdateWords } from "./update-words";
-import type { VersionWindow } from "./version-window";
 import { jobsOf, residentsOf, type Store } from "./store";
 
 export interface MachinePageOptions {
@@ -64,7 +63,7 @@ export interface MachinePageOptions {
   when(at: Date, now: Date): string;
   /** How long ago, as the front page says it. */
   ago(ms: number): string;
-  stats(machine: string | null, after: string | null): Promise<MachineStats>;
+  stats(machine: string | null, after: string | null, seen: StatsSeen | null): Promise<MachineStats>;
   nameProblem(text: string): Promise<NameProblem | null>;
   change(login: Login, change: AccountChange): Promise<void>;
   /** A hub's log, to follow the machine told to uninstall as it is taken off. */
@@ -84,8 +83,8 @@ export interface MachinePageOptions {
         /** A machine of an earlier release updates to its newest. */
         machine(name: string): Promise<UpdateState>;
         remote(name: string, call: UpdateCall): Promise<UpdateState>;
-        versions: VersionWindow;
-        versionsHere(look: boolean): void;
+        /** This device's own update card. */
+        here(): void;
         words: UpdateWords;
         view: UpdateViewWords;
       }
@@ -206,13 +205,10 @@ export class MachinePage implements Page {
       ? new FastctxBlock({
           words: options.manage,
           view: updates.view,
-          versions: updates.versions,
           local: updates.state,
           remote: updates.remote,
           older: updates.machine,
-          versionsHere: updates.versionsHere,
-          due: (login, machine, version) =>
-            options.change(login, { change: "update_due", machine, ...(version ? { version } : {}) }).then(() => options.store.refresh()),
+          here: updates.here,
           kept: (service) => (service ? options.words.service : options.words.noService),
           changed: () => this.render(),
         })
@@ -338,7 +334,8 @@ export class MachinePage implements Page {
     const kept = keptOf(machine.name);
     try {
       const asked = ++kept.asked;
-      const stats = await this.options.stats(machine.here ? null : machine.name, kept.last?.at ?? null);
+      // Asked by how it is written: of two hubs' machines of one name, this one.
+      const stats = await this.options.stats(machine.here ? null : machine.written, kept.last?.at ?? null, seenOf(kept.last));
       take(machine.name, stats, !!kept.last, asked);
       this.problem = null;
     } catch (error) {
@@ -926,7 +923,6 @@ export class MachinePage implements Page {
       version: stats?.node.version ?? factsOf(machine)?.version ?? null,
       service: stats ? stats.node.service : null,
       manages,
-      keeps: !!manages && !!world.accounts.hubs.find((hub) => hub.hub === manages.hub)?.due,
     };
     block.show(subject, this.tab === "manage" && document.visibilityState === "visible");
     this.put("fastctx", this.fastctxBox, block.html(subject));
@@ -953,19 +949,27 @@ export class MachinePage implements Page {
     const viewer = loginsOf(world.accounts).find((login) => machine.on.some((on) => on.hub === login.hub)) ?? null;
     const group = viewer ? (groupsOf(world).find((one) => sameLogin(one.login, viewer)) ?? null) : null;
     const residents = residentsOf(world).filter(
-      (r) => r.about.machine === machine.name && (r.now?.activity === "busy" || r.now?.waiting_for_user || !!r.now?.asked) && (!group || residentIn(world, group, r)),
+      (r) => r.about.machine === machine.written && (r.now?.activity === "busy" || r.now?.waiting_for_user || !!r.now?.asked) && (!group || residentIn(world, group, r)),
     );
-    const jobs = jobsOf(world).filter((job) => job.machine === machine.name);
+    const jobs = jobsOf(world).filter((job) => job.machine === machine.written);
     // Its owner is told how many are at work or waiting there, whosever
     // they are; those of other accounts go without their names.
     const answered = world.who.machines.find((one) => one.kind === "answered" && one.reply.machine === machine.name);
     const busy = answered?.kind === "answered" ? (answered.reply.busy ?? 0) : 0;
     const others = Math.max(0, busy - residents.length);
     const stuck = stats?.node.stuck ?? [];
-    this.presentBox.hidden = !residents.length && !jobs.length && !others && !stuck.length;
-    const stuckSaid = stuck.length
-      ? `<ul class="mp-stuck">${stuck.map((one) => `<li title="${escape(one.what)}">${escape(words.stuck(one.doing, one.what, words.span(one.seconds * 1000)))}</li>`).join("")}</ul>`
-      : "";
+    const health = stats?.node.health ?? [];
+    this.presentBox.hidden = !residents.length && !jobs.length && !others && !stuck.length && !health.length;
+    // Its own warnings in plain words, as it said them a hover away.
+    const healthSaid = (text: string) => {
+      const rows = /has (\d+) unreadable rows/.exec(text);
+      return rows ? words.ledgerRows(Number(rows[1])) : /cannot be read or written/.test(text) ? words.ledgerBroken : words.healthOther;
+    };
+    const warned = [
+      ...stuck.map((one) => `<li title="${escape(one.what)}">${escape(words.stuck(one.doing, one.what, words.span(one.seconds * 1000)))}</li>`),
+      ...health.map((one) => `<li title="${escape(one.text)}">${escape(healthSaid(one.text))}</li>`),
+    ];
+    const stuckSaid = warned.length ? `<ul class="mp-stuck">${warned.join("")}</ul>` : "";
     const agents = residents
       .map(
         (r) =>
@@ -1026,7 +1030,7 @@ export class MachinePage implements Page {
       ? `<div class="given-row"><span class="given-label">${escape(machines.assisting)}</span>${assists
           .map((assist) => {
             const label = `${agentName(assist.agent)} ${assist.account}`;
-            const at = `data-to="${escape(assist.account)}" data-agent="${escape(assist.agent)}"${assist.home ? ` data-home="${escape(assist.home)}"` : ""}${assist.until ? ` data-until="${escape(assist.until)}"` : ""}`;
+            const at = `data-to="${escape(assist.account)}" data-agent="${escape(assist.agent)}"${assist.home ? ` data-home="${escape(assist.home)}"` : ""}${assist.until ? ` data-until="${escape(assist.until)}"` : ""}${assist.daily ? ` data-daily="${assist.daily}"` : ""}${assist.weekly ? ` data-weekly="${assist.weekly}"` : ""}${assist.five_hour ? ` data-five-hour="${assist.five_hour}"` : ""}`;
             const until = assist.until ? new Date(assist.until) : null;
             const said = until ? access.moment.until(until, now) : access.when.none;
             const day = until ? `<span class="assist-tag-until">${glyph("history", 12)}${escape(access.moment.short(until, now))}</span>` : "";
@@ -1127,15 +1131,20 @@ export class MachinePage implements Page {
         const to = target.dataset.to ?? "";
         const agent = target.dataset.agent ?? "";
         const home = target.dataset.home ? { home: target.dataset.home } : {};
-        // Given again by the undo, it ends when it was to.
+        // Given again by the undo, it ends when it was to, and keeps its allowances.
         const until = target.dataset.until ? { until: target.dataset.until } : {};
+        const caps = {
+          ...(target.dataset.daily ? { daily: Number(target.dataset.daily) } : {}),
+          ...(target.dataset.weekly ? { weekly: Number(target.dataset.weekly) } : {}),
+          ...(target.dataset.fiveHour ? { five_hour: Number(target.dataset.fiveHour) } : {}),
+        };
         if (owner)
           void this.takeBack(
             button,
             owner,
             `${agentName(agent)} ${to}`,
             { change: "assist", machine: machine.name, to, agent, ...home, assisting: false },
-            { change: "assist", machine: machine.name, to, agent, ...home, assisting: true, ...until },
+            { change: "assist", machine: machine.name, to, agent, ...home, assisting: true, ...until, ...caps },
           );
         return;
       }

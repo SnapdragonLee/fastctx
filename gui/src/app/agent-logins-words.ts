@@ -46,8 +46,8 @@ export interface AgentLoginsWords extends MachinePickWords {
   searching(directories: number): string;
   stop: string;
   stopped: string;
-  /** A listed login whose tools were not brought up to date by themselves:
-   *  something of theirs changed since, or the output limit waits. */
+  /** A listed login whose tools could not be brought up to date by
+   *  themselves; an older Fastctx's that waits for the output limit. */
   driftChanged: string;
   driftAsks: string;
   searchFailed: string;
@@ -136,6 +136,7 @@ export const zhAgentLogins: AgentLoginsWords = {
   reading: "正在读",
   noneForYou: (agent) => `这台机器上的 ${agent === "codex" ? "Codex" : "Claude Code"} 没有协助你`,
   holds: { mine: "我的机器", shared: "共享给我的", others: "其他成员的", assist: "协助我的" },
+  assistAgents: (owner) => `${owner} 的智能体`,
   ownedBy: (owner) => `${owner} 的`,
   pickMachine: "换一台机器",
   scanHere: "扫描这台电脑",
@@ -157,7 +158,7 @@ export const zhAgentLogins: AgentLoginsWords = {
   searching: (directories) => `已看 ${directories.toLocaleString("zh-CN")} 个文件夹`,
   stop: "停止",
   stopped: "已停止",
-  driftChanged: "接入被改过",
+  driftChanged: "接入没跟上",
   driftAsks: "接入要更新",
   searchFailed: "没找完",
   noneBelow: "没找到",
@@ -231,6 +232,7 @@ export const enAgentLogins: AgentLoginsWords = {
   reading: "Reading",
   noneForYou: (agent) => `No ${agent === "codex" ? "Codex" : "Claude Code"} login here assists you`,
   holds: { mine: "My machines", shared: "Shared with me", others: "Other members'", assist: "Assisting me" },
+  assistAgents: (owner) => `${owner}'s agents`,
   ownedBy: (owner) => `${owner}'s`,
   pickMachine: "Choose a machine",
   scanHere: "Scan this computer",
@@ -252,7 +254,7 @@ export const enAgentLogins: AgentLoginsWords = {
   searching: (directories) => `${directories.toLocaleString("en")} folders seen`,
   stop: "Stop",
   stopped: "Stopped",
-  driftChanged: "Changed since",
+  driftChanged: "Not up to date",
   driftAsks: "Needs update",
   searchFailed: "Not finished",
   noneBelow: "None found",

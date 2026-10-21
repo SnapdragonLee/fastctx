@@ -66,7 +66,7 @@ pub(crate) async fn tell_at(
     notice: Notice,
     owed: Owed,
 ) -> Result<Landed, Failure> {
-    if machine.hub.is_none() && node.is_me(&to.machine) {
+    if node.is_here(machine) {
         let delivery = Delivery { id, at: Timestamp::now(), notice };
         if crate::on_delivery::park(node, &to.resident, &delivery)
             .map_err(|error| Failure::new(format!("keeping the on completion: {error}")))?
@@ -93,6 +93,11 @@ pub(crate) async fn tell_at(
 /// Tells a resident of this machine something: kept first, then handed over
 /// the way its host lets the World in.
 pub async fn tell_here(node: &Arc<Node>, to: &ResidentId, delivery: Delivery, owed: Owed) -> Result<Landed, Failure> {
+    let actions = crate::control_queue::gate(node, to);
+    let _action = if delivery.notice.along().is_none() { Some(actions.lock().await) } else { None };
+    if _action.is_some() && node.residents.active(to).is_ok() {
+        crate::control_queue::drain(node, to).await?;
+    }
     let gate = node.residents.management(to)?;
     // Someone's words are asked from outside: one being deleted refuses
     // them at once, and they wait for what changes its life no longer than
@@ -239,6 +244,9 @@ pub async fn hand_over(
     // Startup's recovery may need the gate alone, as to finish a deletion:
     // nothing waits for it holding the gate.
     node.ready().await;
+    let actions = crate::control_queue::gate(node, to);
+    let _action = actions.lock().await;
+    crate::control_queue::drain(node, to).await?;
     let gate = node.residents.management(to)?;
     let _reading = gate.read().await;
     hand_over_locked(node, to, about, directory, pending).await
@@ -314,6 +322,9 @@ pub async fn send_composer(
     idle_only: bool,
 ) -> Result<Option<Landed>, Failure> {
     node.ready().await;
+    let actions = crate::control_queue::gate(node, id);
+    let _action = actions.lock().await;
+    crate::control_queue::drain(node, id).await?;
     let gate = node.residents.management(id)?;
     let _reading = gate.read().await;
     node.residents.active(id)?;
@@ -355,7 +366,7 @@ async fn submit_thread(
     let (about, _) = node.residents.about(id).ok_or_else(|| Failure::new(format!("{id} has no record here")))?;
     crate::homes::available(node, &about)?;
     crate::assists::may_turn(node, id, &about)?;
-    let codex = node.codex.of(&about)?;
+    let codex = node.codex.of(node, &about)?;
     // Its tools start before the words go in, outside the lock others' words
     // and its turns' ends wait on.
     let missing = codex.prepare(thread).await.map_err(Failure::new)?;

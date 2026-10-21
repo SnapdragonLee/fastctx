@@ -689,6 +689,12 @@ pub struct View {
     /// session of a member that sent one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deletes_projects: bool,
+    /// Deletes the owner's conversations as part of deleting a project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deletes_project_conversations: bool,
+    /// Projects this member must finish deleting before acknowledging them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub project_deletions: Vec<Project>,
     /// Whether this hub keeps the machines that relay for their owner's
     /// others on their network (`Member::relay`, `Change::Relay`). Earlier
     /// hubs omit it, and would end the session of a member that sent one.
@@ -704,6 +710,9 @@ pub struct View {
     /// would end the session of a member that sent one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub profiles: bool,
+    /// The hub accepts account-level Claude subagent changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subagents: bool,
     /// Whether this hub keeps the network's versions: it takes
     /// `Up::Versions`, answers `Question::Package`, takes `Change::Updates`
     /// and the data connections of packages. Earlier hubs omit it, and would
@@ -772,9 +781,12 @@ impl View {
             groups: false,
             dissolves: false,
             deletes_projects: false,
+            deletes_project_conversations: false,
+            project_deletions: Vec::new(),
             lan_relays: false,
             paced_intake: false,
             profiles: false,
+            subagents: false,
             versions: false,
             package_progress: false,
             due: false,

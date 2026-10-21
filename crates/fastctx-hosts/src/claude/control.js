@@ -16,7 +16,9 @@ const reservations = new Map()
 
 async function controlReserved(sessionId) {
   const reserving = reservations.get(sessionId)
-  if (reserving) await reserving.catch(() => {})
+  // 2026-10-21: an early control hook must not recreate a directory while the node moves it.
+  if (!reserving) throw new Error('the Claude session directory has not been reserved yet')
+  await reserving
 }
 
 function controlWake(sessionId, look) {
@@ -88,6 +90,7 @@ async function controlOpen($, sessions, sessionId) {
     const host = {
       session: sessionId, process: identity.process, parent: identity.parent,
       command_contract: 2,
+      assisted: await assistedSession($),
       // Persisted before polling: even a reload in the same clock tick or
       // after a clock rollback gets a different answer address.
       instance: String(Math.max(Date.now(), Number(prior?.instance ?? 0) + 1)),
@@ -113,6 +116,9 @@ async function controlOpen($, sessions, sessionId) {
     await controlWrite($, directory + '/activity.json', { instance: host.instance, turn: null })
     await $.fs.write(directory + '/host.done', '')
     sessions.set(sessionId, state)
+    const offered = await controlExecute($, state, { do: 'offers' })
+    await writeReport($, directory + '/catalog-' + host.instance, JSON.stringify(offered))
+    await $.fs.write(directory + '/catalog-' + host.instance + '.done', '')
     void controlWatchGuard($, state)
     // Controls asked for before this activation are taken at once.
     void controlPoll($, state)
@@ -236,11 +242,10 @@ async function controlExecute($, state, control) {
     const commands = await controlCatalog($, state)
     const rows = await $.config.list()
     const usage = await $.session.usage({ breakdown: 'summary' })
-    // What it can do at all: a compaction or rewind asked for while a turn
-    // runs is refused then, and the interface waits for the turn's end.
+    // Availability is independent of the current turn or process lifetime.
     const controls = ['command', 'compact', 'rewind', 'model', 'agents', 'agent_messages']
     if (commands.some((command) => command.name === 'rename')) controls.push('rename')
-    return {
+    const offered = {
       checkpoints: Object.entries(state.checkpoints.turns).map(([turn, point]) => ({ turn,
         rewind: point.before > 0 && point.before_uuid != null, fork: point.after > 0 && point.after_uuid != null })),
       history_limits: { files_restored: false, compacted_turns_reachable: false, empty_prefix_allowed: false, complete_prefix: state.checkpoints.full === true },
@@ -255,6 +260,7 @@ async function controlExecute($, state, control) {
         cost_usd: usage.cost?.usd ?? null, raw: usage,
       },
     }
+    return offered
   }
   if (control.do === 'compact') {
     return controlCompact($, state)
@@ -281,7 +287,10 @@ async function controlExecute($, state, control) {
     if (state.checkpoints.full !== true) throw new Error('this session has no fully observed message prefix')
     return { hashes: state.checkpoints.messages.slice(0, count), retained_until: state.checkpoints.turns[control.through].after_uuid }
   }
-  if (control.do === 'checkpoint_export') return state.checkpoints.full === true ? state.checkpoints : null
+  if (control.do === 'checkpoint_export') {
+    await controlCheckpoint($, state, null, true)
+    return state.checkpoints.full === true ? state.checkpoints : null
+  }
   if (control.do === 'fork_prepare') {
     // An idle CLI fork keeps its history in memory until the first new row.
     // A native system notice persists it without a prompt or model request.
@@ -292,6 +301,15 @@ async function controlExecute($, state, control) {
   if (control.do === 'checkpoint_import') {
     const current = await $.session.messages()
     const hashes = await messageFingerprints(current)
+    // A compaction's result that no transcript row anchors stays in the
+    // source's memory, and a fork, rebuilt from the transcript, does not
+    // carry it (2.1.303). Only such leading messages may be missing; the
+    // turns are counted from what the fork keeps.
+    const missing = control.checkpoints.messages.length - hashes.length
+    if (current.length < 4096 && missing > 0 && control.checkpoints.uuids?.length === control.checkpoints.messages.length
+      && control.checkpoints.uuids.slice(0, missing).every((uuid) => uuid == null)) {
+      control.checkpoints = checkpointsFrom(control.checkpoints, missing)
+    }
     const expected = control.checkpoints.messages
     const expectedTail = current.length >= 4096 ? expected.slice(-hashes.length) : expected
     if (hashes.length !== expectedTail.length || !hashes.every((hash, index) => expectedTail[index] === hash)) throw new Error('the fork does not carry the same retained message context')

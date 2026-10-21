@@ -20,6 +20,8 @@ import type { TalkActs } from "./talk-acts";
 export interface TalkRowWords {
   /** "Claude laptop". */
   someone(agent: string, machine: string): string;
+  /** An agent assisting the user, as whose it is, never its machine. */
+  someoneAssisting(agent: string, owner: string): string;
   busy(lasted: string): string;
   waiting: string;
   /** Its machine is away: the conversation is listed as it last was. */
@@ -27,6 +29,8 @@ export interface TalkRowWords {
   span(ms: number): string;
   /** The kind of device, for a screen reader: "laptop". */
   device(form: "desktop" | "laptop" | "server"): string;
+  /** It was forked from another conversation. */
+  forked: string;
 }
 
 /** What a row says of the user's own acts on it. */
@@ -62,15 +66,16 @@ export function byRecent(residents: ResidentNow[]): ResidentNow[] {
 /** Each machine's facts by name, for the device marks. */
 export function factsByMachine(world: WorldNow | null): Map<string, MachineFacts> {
   const facts = new Map<string, MachineFacts>();
-  for (const machine of machinesOf(world)) if ("Ok" in machine.facts) facts.set(machine.name, machine.facts.Ok);
+  for (const machine of machinesOf(world)) if ("Ok" in machine.facts) facts.set(machine.written, machine.facts.Ok);
   return facts;
 }
 
-export function talkRow(r: ResidentNow, place: Place, now: Date, facts: Map<string, MachineFacts>, words: TalkRowWords, acts?: RowActs): string {
+export function talkRow(r: ResidentNow, place: Place, now: Date, facts: Map<string, MachineFacts>, words: TalkRowWords, acts?: RowActs, assisting: string | null = null): string {
   const address: Address = { resident: r.about.id, machine: r.about.machine };
   const current = place.kind === "talk" && place.address.resident === address.resident && place.address.machine === address.machine;
   const agent = agentName(r.about.host.agent);
-  const someone = words.someone(agent, r.about.machine);
+  // An agent assisting the user is said as whose it is: its machine is not the user's to see.
+  const someone = assisting !== null ? words.someoneAssisting(agent, assisting) : words.someone(agent, r.about.machine);
   const name = titleOf(r) ?? someone;
   // What a machine away last said of a conversation is not said as now.
   const away = isUnreached(r);
@@ -84,19 +89,23 @@ export function talkRow(r: ResidentNow, place: Place, now: Date, facts: Map<stri
   const known = facts.get(r.about.machine);
   // A node too old to say what it is runs on a computer more often than not.
   const form = known?.form ?? "desktop";
-  const device = [r.about.machine, known ? osName(known.os) : ""].filter(Boolean).join(" ");
+  const device = assisting !== null ? someone : [r.about.machine, known ? osName(known.os) : ""].filter(Boolean).join(" ");
   const named =
     acts?.renaming !== null && acts?.renaming !== undefined
       ? `<input class="talk-rename" value="${escape(acts.renaming)}" aria-label="${escape(name)}" spellcheck="false" autocomplete="off">`
       : `<span class="talk-name" title="${escape([name, name === someone ? "" : someone].filter(Boolean).join("\n"))}">${escape(name)}</span>`;
+  // A fork says so beside its name, quietly.
+  const titled = r.about.forked_from && !acts?.renaming
+    ? `<span class="talk-named">${named}<span class="talk-forked" title="${escape(words.forked)}" aria-label="${escape(words.forked)}">${glyph("fork", 13)}</span></span>`
+    : named;
   const stateCell = deleting
     ? `<span class="talk-state">${escape(state)}</span>`
     : `<span class="talk-state" title="${escape(state)}"><span class="mark${kind ? ` ${kind}` : ""}" aria-hidden="true"></span><span class="spoken">${escape(state)}</span></span>`;
   return `<li class="talk-item"${acts ? ` data-own-press data-machine="${escape(address.machine)}" data-resident="${escape(address.resident)}"` : ""}><a class="talk-row${kind ? ` ${kind}` : ""}${archived ? " archived" : ""}${current ? " current" : ""}" href="${link({ kind: "talk", address })}"${current ? ' aria-current="page"' : ""}>
     <span class="talk-host" title="${escape(agent)}">${host}</span>
-    ${named}
+    ${titled}
     ${stateCell}
-    <span class="talk-device" title="${escape(device)}" aria-label="${escape(`${words.device(form)} ${r.about.machine}`)}">${glyph(form, 16)}</span>
+    <span class="talk-device" title="${escape(device)}" aria-label="${escape(assisting !== null ? device : `${words.device(form)} ${r.about.machine}`)}">${glyph(assisting !== null ? "colleague" : form, 16)}</span>
   </a>${acts && !deleting ? quick(acts, archived, name) : ""}</li>`;
 }
 

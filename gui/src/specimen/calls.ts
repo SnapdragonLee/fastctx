@@ -22,14 +22,24 @@ export async function specimenCalls(machine: string, agent: string, dir: string,
   if (!rows) made.set(key, (rows = make(machine, agent, dir, at)));
   const all = await rows;
   const person = query.person;
+  const since = query.from ? Date.parse(query.from) : -Infinity;
+  const until = query.until ? Date.parse(query.until) : Infinity;
   const matching = all.filter(
     (row) =>
-      (!person || (person.account === null ? row.who === null : row.who?.hub === person.account.hub && row.who.account === person.account.account)) &&
+      (!person ||
+        (person.account === null ? row.who === null : (row.who?.hub === person.account.hub && row.who.account === person.account.account) || (!!person.with_machine && row.who === null))) &&
+      Date.parse(row.timing.ended_at) >= since &&
+      Date.parse(row.timing.ended_at) < until &&
       (!query.model || row.model === query.model) &&
       (!query.source || row.source === query.source) &&
       (!query.outcome || row.outcome === query.outcome) &&
       (!query.conversation || (row.conversation === query.conversation && (!query.turn || row.turn === query.turn))),
   );
+  if (query.page != null) {
+    const page = matching.slice(query.page * PAGE, (query.page + 1) * PAGE);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    return { rows: page, next: (query.page + 1) * PAGE < matching.length ? page[page.length - 1]!.cursor : null, total: matching.length };
+  }
   const start = query.before ? matching.findIndex((row) => Number(row.cursor.key) > Number(query.before!.key)) : 0;
   const from = start < 0 ? matching.length : start;
   const page = matching.slice(from, from + PAGE);
@@ -74,11 +84,15 @@ async function make(machine: string, agent: string, dir: string, at: Date): Prom
       const roll = random();
       const outcome: CallOutcome = roll < 0.012 ? "failed" : roll < 0.022 ? "interrupted" : claude && roll < 0.027 ? "held" : "completed";
       const sent = outcome !== "held";
-      const usd = claude ? (sent ? ((model.includes("haiku") ? 0.2 : model.includes("sonnet") ? 0.6 : 1) * (input * 5 + write * 6.25 + read * 0.5 + output * 25)) / 1_000_000 : 0) : null;
+      // What the request was sent with: Haiku takes none.
+      const effort = !sent || model.includes("haiku") ? null : claude ? (model.includes("sonnet") ? "medium" : random() < 0.2 ? "xhigh" : "high") : model === "gpt-6" ? "high" : random() < 0.7 ? "low" : "medium";
+      // Millionths of a dollar, as the ledger keeps them.
+      const usd = claude ? (sent ? Math.round((model.includes("haiku") ? 0.2 : model.includes("sonnet") ? 0.6 : 1) * (input * 5 + write * 6.25 + read * 0.5 + output * 25)) : 0) : null;
       rows.push({
         cursor: { at: new Date(at).toISOString(), key: "" },
         who,
         model,
+        effort,
         tokens: sent ? (claude ? { input, cache_read: read, cache_write: write, output } : { input, cache_read: read, output, reasoning }) : null,
         usd,
         source: agentStep ? "agent" : "main",
@@ -91,14 +105,20 @@ async function make(machine: string, agent: string, dir: string, at: Date): Prom
       });
       context += input + output + write * 0.4;
       at -= took + 300 + random() * 4000;
-      // Now and then Claude Code's own request between two of the turn's.
+      // Now and then Claude Code's own request between two of the turn's:
+      // priced, as a title is, or a sum its total grew by that no request
+      // has claimed.
       if (claude && random() < 0.05) {
+        const priced = random() < 0.5;
+        const input = Math.round(300 + random() * 900);
+        const output = Math.round(8 + random() * 30);
         rows.push({
           cursor: { at: new Date(at).toISOString(), key: "" },
           who,
-          model: null,
-          tokens: null,
-          usd: 0.002 + random() * 0.03,
+          model: priced ? "claude-haiku-5-5" : null,
+          effort: null,
+          tokens: priced ? { input, cache_read: 0, cache_write: 0, output } : null,
+          usd: priced ? Math.round(0.2 * (input * 5 + output * 25)) : Math.round((0.002 + random() * 0.03) * 1_000_000),
           source: "background",
           agent: null,
           timing: { started_at: null, first_at: null, ended_at: new Date(at).toISOString(), approximate: false },

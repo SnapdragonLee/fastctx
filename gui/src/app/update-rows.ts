@@ -1,11 +1,13 @@
-// The settings' rows of new versions (`world-upgrade.md`, 界面上的样子): this
-// application's version, and 「检查更新」, which opens the window of versions
-// and looks on GitHub; what was found or heard from the network, a newer
-// version opening that window too; and the device's choices: automatic
-// updates, and, on a computer, passing packages to the network's devices.
-// Which line it follows is the line of the version it runs: no choice.
+// The update card's rows of this device (`world-upgrade.md`, 界面上的样子):
+// this application's version, and 「检查更新」, which opens the window of
+// versions and looks on GitHub; what was found or heard from the network,
+// a newer version being the card's own top; and the device's choices:
+// automatic updates, and, on a computer, passing packages to the network's
+// devices. Which line it follows is the line of the version it runs: no
+// choice.
 
 import { escape } from "../conversation/prose";
+import { detailOf } from "./problem";
 import { effect } from "./signals";
 import { lineOf, stageMark } from "./update-marks";
 import type { Updates } from "./updates";
@@ -32,7 +34,6 @@ export class UpdateRows {
     element.addEventListener("click", (event) => {
       const target = event.target as HTMLElement;
       if (target.closest("[data-update-look]")) this.versions(true);
-      else if (target.closest("[data-update-open]")) this.versions(false);
       const choice = target.closest<HTMLButtonElement>("[data-update-choice]");
       if (choice) this.choose(choice.dataset.updateChoice!, choice.dataset.value!);
     });
@@ -54,25 +55,31 @@ export class UpdateRows {
       settings.auto = value === "on";
       settings.chosen = true;
     } else if (kind === "relays") settings.relays = value === "on";
-    this.updates.set(settings).catch((error: unknown) => {
-      this.said = String(error);
-      this.draw(this.updates.state.peek());
-    });
+    this.updates.set(settings).then(
+      () => {
+        this.said = "";
+        this.draw(this.updates.state.peek());
+      },
+      (error: unknown) => {
+        this.said = detailOf(error);
+        this.draw(this.updates.state.peek());
+      },
+    );
   }
 
   /** The one line of how this device's updates stand, and what is behind
-   *  it a hover away. */
+   *  it a hover away; nothing of a newer version the card shows above. */
   private line(state: UpdateState | null): string {
     const { words } = this;
     const offered = this.updates.offered.peek();
-    if (this.said) return escape(this.said);
+    if (this.said) return `<span class="settings-wrong" title="${escape(this.said)}">${escape(words.notSet)}</span>`;
     if (!state) return "";
     const looked = state.looked;
     const said = (text: string, title = "", tone = "") => `<span${tone ? ` class="${tone}"` : ""}${title ? ` title="${escape(title)}"` : ""}>${escape(text)}</span>`;
     if (looked.checking) return said(words.looking);
     const stage = state.stage ? stageMark(state.stage, lineOf(this.updates.version), this.view) : null;
     if (stage) return said(stage.said, "", stage.kind === "failed" ? "settings-wrong" : "");
-    if (offered) return `<button class="text-button quiet-button" type="button" data-update-open>${escape(words.available(offered.manifest.version))}</button>`;
+    if (offered) return "";
     const next = looked.next ? words.nextCheck(new Date(looked.next)) : "";
     const failure = looked.failure;
     if (failure) {
@@ -106,12 +113,12 @@ export class UpdateRows {
     // Until the owner chooses, a computer with the application does not
     // update by itself: it says so beside the choice.
     const byDefault = settings && !settings.chosen ? `<span class="choice-note">${escape(words.autoByDefault)}</span>` : "";
-    const html = `<dt>${escape(words.updates)}</dt><dd><span>${escape(words.current(this.updates.version))}</span><button class="text-button quiet-button" type="button" data-update-look>${escape(words.look)}</button>${
+    const html = `<dt>${escape(words.version)}</dt><dd><span>${escape(words.current(this.updates.version))}</span><button class="text-button quiet-button" type="button" data-update-look>${escape(words.look)}</button>${
       line ? `<p class="settings-said" role="status">${line}</p>` : ""
     }</dd>${
       settings
         ? `<dt>${escape(words.auto)}</dt><dd>${choices("auto", onOff, auto ? "on" : "off")}${byDefault}</dd>
-           ${this.relays ? `<dt>${escape(words.relay)}</dt><dd>${choices("relays", onOff, settings.relays ? "on" : "off")}</dd>` : ""}`
+           ${this.relays ? `<dt title="${escape(words.relayWhole)}">${escape(words.relay)}</dt><dd>${choices("relays", onOff, settings.relays ? "on" : "off")}</dd>` : ""}`
         : ""
     }`;
     if (this.element.innerHTML !== html) this.element.innerHTML = html;

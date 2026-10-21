@@ -62,11 +62,33 @@ pub(super) fn offer_to(hub: &Hub, name: &MachineName, network: &mut Network) {
             .cloned()
             .unwrap_or_default()
     };
-    let cache = hub.updates.lock().expect("never poisoned").cache.clone();
+    let (cache, known) = {
+        let updates = hub.updates.lock().expect("never poisoned");
+        (updates.cache.clone(), updates.manifests().collect::<Vec<_>>())
+    };
     let held = held(hub, &cache);
-    let ready = |m: &Manifest| for_targets(m, &targets).iter().all(|p| held.contains(p));
-    network.stable = network.stable.take().filter(ready);
-    network.beta = network.beta.take().filter(ready);
+    network.stable = network.stable.take().and_then(|newest| standing(&known, &newest, &targets, &held));
+    network.beta = network.beta.take().and_then(|newest| standing(&known, &newest, &targets, &held));
+}
+
+/// The release of `newest`'s line a machine updating through the network is
+/// offered: `newest` once the hub holds its packages for `targets` whole, and
+/// until then, or if one of them never comes, the newest it does hold whole.
+fn standing(known: &[Manifest], newest: &Manifest, targets: &PackageTargets, held: &BTreeSet<Held>) -> Option<Manifest> {
+    let ready = |m: &Manifest| {
+        let wanted = for_targets(m, targets);
+        !wanted.is_empty() && wanted.iter().all(|p| held.contains(p))
+    };
+    if ready(newest) {
+        return Some(newest.clone());
+    }
+    let ceiling = newest.semver()?;
+    known
+        .iter()
+        .filter(|m| m.semver().is_some_and(|v| v.pre.is_empty() == ceiling.pre.is_empty() && v < ceiling))
+        .filter(|m| ready(m))
+        .max_by_key(|m| m.semver())
+        .cloned()
 }
 
 /// The packages of `manifest` the network's machines need, and how many
@@ -110,6 +132,34 @@ pub(super) fn held(hub: &Hub, cache: &Cache) -> BTreeSet<Held> {
 pub(super) fn ready_network(hub: &Hub, mut network: Network) -> Network {
     let cache = hub.updates.lock().expect("never poisoned").cache.clone();
     let held = held(hub, &cache);
+    let manifests: Vec<Manifest> = hub.updates.lock().expect("never poisoned").manifests().collect();
+    let targets_of = |name: &MachineName| {
+        let store = hub.store();
+        store.book.directory.member(name).and_then(|member| store.hub.package_targets.get(&member.key)).cloned()
+    };
+    // A machine asked to update when it comes back is brought to the newest
+    // release of the line and major version it was asked for that the
+    // network has whole for it: it was asked to catch up, and a newer one
+    // came while it was away.
+    for (name, due) in network.due.iter_mut() {
+        let channel = fastctx_types::update::Channel::of(&due.version);
+        let major = fastctx_types::update::release(&due.version).map(|version| version.major);
+        let through = needs_network(hub, name);
+        let targets = targets_of(name).unwrap_or_default();
+        let newest = manifests
+            .iter()
+            .filter(|manifest| {
+                channel.takes(&manifest.version)
+                    && manifest.newer_than(&due.version)
+                    && manifest.semver().map(|version| version.major) == major
+                    && (!through || for_targets(manifest, &targets).iter().all(|package| held.contains(package)))
+            })
+            .max_by_key(|manifest| manifest.semver());
+        if let Some(newest) = newest {
+            due.version = newest.version.clone();
+            due.manifest = None;
+        }
+    }
     network.due.retain(|name, due| {
         if !needs_network(hub, name) {
             return true;
@@ -129,19 +179,33 @@ pub(super) fn ready_network(hub: &Hub, mut network: Network) -> Network {
 
 /// Only live demand retains an older version; time is never a reason to delete it.
 pub(crate) fn prune(hub: &Hub) {
-    let (cache, manifests) = {
+    let (cache, manifests, through_network) = {
         let updates = hub.updates.lock().expect("never poisoned");
-        (updates.cache.clone(), updates.manifests().collect::<Vec<_>>())
+        let through: Vec<_> =
+            updates.last.iter().filter(|(_, last)| last.report.needs_network()).map(|(key, _)| *key).collect();
+        (updates.cache.clone(), updates.manifests().collect::<Vec<_>>(), through)
     };
+    let held = held(hub, &cache);
     let versions = cache.versions();
     let mut newest = std::collections::BTreeMap::<_, Manifest>::new();
-    for manifest in manifests {
+    for manifest in &manifests {
         let channel = fastctx_types::update::Channel::of(&manifest.version);
         if newest.get(&channel).is_none_or(|old| manifest.semver() > old.semver()) {
-            newest.insert(channel, manifest);
+            newest.insert(channel, manifest.clone());
         }
     }
-    let mut keep: BTreeSet<String> = newest.into_values().map(|m| m.version).collect();
+    let mut keep: BTreeSet<String> = newest.values().map(|m| m.version.clone()).collect();
+    // What a machine updating through the network is offered while a newer
+    // release comes in stays until the newer one is whole for it.
+    {
+        let store = hub.store();
+        for key in &through_network {
+            let targets = store.hub.package_targets.get(key).cloned().unwrap_or_default();
+            for top in newest.values() {
+                keep.extend(standing(&manifests, top, &targets, &held).map(|m| m.version));
+            }
+        }
+    }
     // A queued demand and a new owner cannot enter between the decision and
     // the rename. Deleting the retired directory needs neither shared lock.
     let store = hub.store();
@@ -218,11 +282,18 @@ pub(crate) fn prefetch(hub: &Arc<Hub>) {
         if start && let Some(machine) = machine {
             let hub = hub.clone();
             tokio::spawn(async move {
-                if let Err(why) = prepare_update(&hub, &machine, &version).await {
-                    hub.log.line(format_args!("preparing {version} for {machine}: {why}"));
-                    super::view::problem(&hub, &version, None, Some(why));
-                }
+                let failed = match prepare_update(&hub, &machine, &version).await {
+                    Ok(()) => false,
+                    Err(why) => {
+                        hub.log.line(format_args!("preparing {version} for {machine}: {why}"));
+                        super::view::problem(&hub, &version, None, Some(why));
+                        true
+                    }
+                };
                 super::tell(&hub, None);
+                if failed {
+                    again(hub).await;
+                }
             });
         }
     }
@@ -263,16 +334,31 @@ pub(crate) fn prefetch(hub: &Arc<Hub>) {
     // (`super::obtain`); machines are told as each comes.
     let hub = hub.clone();
     tokio::spawn(async move {
+        let mut failed = false;
         for (package, _) in wanted {
             hub.log.line(format_args!("preparing {} of {} before announcing it", package.target, package.version));
             let version = package.version.clone();
             let target = package.target.clone();
             let outcome = super::obtain::obtain(&hub, package, None).await;
+            failed |= outcome.is_err();
             super::view::problem(&hub, &version, Some(&target), outcome.err());
             super::tell(&hub, None);
         }
+        if failed {
+            again(hub).await;
+        }
     });
 }
+
+/// After a package or a release's manifest did not come, the hub tries
+/// again a while later by itself: the machines waiting for it may have
+/// nobody to ask for it again, and may reach nothing but the hub.
+async fn again(hub: Arc<Hub>) {
+    tokio::time::sleep(PREFETCH_AGAIN).await;
+    prefetch(&hub);
+}
+
+const PREFETCH_AGAIN: Duration = Duration::from_secs(5 * 60);
 
 /// The batch waits here before issuing its first remote update. Its durable
 /// demand was recorded by the ordinary update-management operation already.
@@ -285,23 +371,21 @@ pub(crate) async fn prepare_update(hub: &Arc<Hub>, name: &MachineName, version: 
         }
         store.hub.package_targets.get(&member.key).cloned().unwrap_or_default()
     };
-    let (known, releases, cache) = {
+    let (known, previous, cache) = {
         let updates = hub.updates.lock().expect("never poisoned");
-        (updates.manifest(version), updates.looked.releases.clone(), updates.cache.clone())
+        (updates.manifest(version), updates.looked.clone(), updates.cache.clone())
     };
     let manifest = match known {
         Some(manifest) => manifest,
         None => {
-            let releases = if releases.iter().any(|release| release.version == version) {
-                releases
+            let releases = if previous.releases.iter().any(|release| release.version == version) {
+                previous.releases
             } else {
-                let looked = fastctx_update::github::look(None).await;
+                let looked = super::discovery::check(hub, true).await;
                 if let Some(why) = &looked.why {
                     hub.log.line(format_args!("looking for {version}: {why}"));
                 }
-                let releases = looked.releases.clone();
-                hub.updates.lock().expect("never poisoned").looked = looked;
-                releases
+                looked.releases
             };
             fastctx_update::github::manifest_of(&releases, version).await?
         }

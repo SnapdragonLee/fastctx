@@ -1,5 +1,6 @@
 //! The only writer and release coordinator of each conversation's composer.
 
+mod commands;
 mod receipts;
 mod state;
 mod storage;
@@ -7,9 +8,11 @@ mod submissions;
 pub(crate) mod uploads;
 mod watching;
 
+use fastctx_types::access::Written;
 pub use storage::recover;
 use storage::{event, load, publish};
 pub use submissions::resume;
+pub use commands::{forget_command, next_command, place_command};
 pub use submissions::{awaits_turn, bound, turn_ended, uncertain};
 use submissions::{dispatch, schedule};
 pub use watching::{Lease, snapshot, watch};
@@ -64,15 +67,16 @@ fn failure(error: impl std::fmt::Display) -> Failure {
 pub async fn request(
     node: &Arc<Node>,
     resident: ResidentId,
-    machine: Option<MachineName>,
+    machine: Option<Written>,
     request: Request,
 ) -> Result<Updated, Failure> {
+    let local = machine.is_none() && node.residents.about(&resident).is_some();
     let machine = match machine {
-        Some(machine) => machine.into(),
+        Some(machine) => machine,
         None if node.residents.about(&resident).is_some() => node.machine().into(),
         None => crate::colleagues::find_for(node, &Acting::Here, &resident).await?,
     };
-    if machine.hub.is_none() && node.is_me(&machine.name) {
+    if local || node.is_here(&machine) {
         return here(node, &node.machine(), &resident, request).await;
     }
     let call = RemoteCall::Composer { resident, request };
@@ -145,6 +149,7 @@ pub async fn here(node: &Arc<Node>, from: &MachineName, id: &ResidentId, request
                 editors: HashSet::new(),
                 error: None,
                 submitted: None,
+                command: false,
             });
             let now = node.residents.now(id).ok_or_else(|| failure("unknown resident"))?;
             if now.activity != Activity::Busy

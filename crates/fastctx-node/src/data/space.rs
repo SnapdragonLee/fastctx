@@ -182,7 +182,7 @@ fn measure_conversations(node: &Node, wanted: Option<&str>) -> io::Result<BTreeM
     let user_home = fastctx_platform::user_home()?;
     let environment = crate::claude::environment().map_err(|failure| io::Error::other(failure.message))?;
     let claude_default = crate::homes::claude_default(&environment, &user_home);
-    let codex_default = node.codex.default().config_home().to_path_buf();
+
     for (name, one) in measured.iter_mut() {
         let Some(Kind::Home(id)) = Kind::of(name) else { continue };
         let directory = world.conversation(&id);
@@ -198,7 +198,14 @@ fn measure_conversations(node: &Node, wanted: Option<&str>) -> io::Result<BTreeM
                 one.records.add(tally(exchange)?);
             }
         }
-        let Ok(about) = crate::residents::read_about(&directory) else { continue };
+        let about = match crate::residents::read_about(&directory) {
+            Ok(about) => about,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => match crate::forks::retained(&directory)? {
+                Some(about) => about,
+                None => continue,
+            },
+            Err(_) => continue,
+        };
         let mut host_record = HostRecord::None;
         let mut keeping_days = None;
         let mut transcript_present = false;
@@ -206,7 +213,12 @@ fn measure_conversations(node: &Node, wanted: Option<&str>) -> io::Result<BTreeM
             "codex" => {
                 if let Some(thread) = &about.session {
                     one.sessions.push(thread.clone());
-                    let home = about.home.clone().unwrap_or_else(|| codex_default.clone());
+                    let home = node
+                        .codex
+                        .of(node, &about)
+                        .map_err(|error| io::Error::other(error.message))?
+                        .session_home()
+                        .to_path_buf();
                     if !rollouts.contains_key(&home) {
                         rollouts.insert(home.clone(), host::codex_rollouts(&home)?);
                     }

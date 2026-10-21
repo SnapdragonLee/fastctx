@@ -187,6 +187,9 @@ pub enum Intent {
         /// page with one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         project_deletes: bool,
+        /// Understands shared attachment lifetimes and account-scoped project deletion.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        conversation_deletions: bool,
         /// The member reads the records of profiles written. Earlier
         /// releases do not say so, and could read nothing of a machine log
         /// page with one.
@@ -570,6 +573,10 @@ pub enum Question {
     /// Every project this member may use, each with the number of its
     /// latest entry. This does not subscribe the asker to replication.
     LedgerCatalog,
+    /// This member finished the project deletion delivered in its view.
+    ProjectDeleted {
+        town: TownId,
+    },
     /// A project's entries after the one numbered `after`, as many as fit
     /// in one frame.
     LedgerRead {
@@ -655,6 +662,11 @@ pub enum Change {
     /// machine that works for the account may (`world-user-config.md`).
     Profile {
         profile: fastctx_types::profile::Profile,
+    },
+    /// Changes only the fourth profile component, over the shared profile version.
+    Subagents {
+        version: u64,
+        subagents: Option<fastctx_types::profile::Subagents>,
     },
     /// Shares `machine`, one of the account's own, with `to`, or no longer.
     Share {

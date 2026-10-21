@@ -34,10 +34,11 @@ import { effect, type Signal } from "../signals";
 import type { Store } from "../store";
 import { CallsList, type CallsContext } from "./calls";
 import type { CallsWords } from "./calls-words";
-import { bar, calendar, meter, parts, punch, quota, weeks, type Amounts, type RingPart } from "./draw";
+import { bar, calendar, fitInks, meter, parts, punch, quota, weeks, type Amounts, type RingPart } from "./draw";
 import { keepRecord, keptRecord, keptReport, readReport, reportKey } from "./kept";
-import { allowanceTrack, between, byDay, byHourOfWeek, dayOf, DAY_MS, daysBefore, longestRun, pace, total, track, usageOf, valueOf, type Person, type Span, type Unit, type Usage, type Went } from "./model";
+import { allowanceTrack, between, byDay, byHourOfWeek, dayOf, DAY_MS, daysBefore, longestRun, pace, total, track, usageOf, valueOf, windowOf, type Person, type Span, type Unit, type Usage, type Went } from "./model";
 import { assistingMe, assistsOf, namer } from "./people";
+import { assistingOwner } from "../reach";
 import type { UsageWords } from "./words";
 
 type Agent = "codex" | "claude";
@@ -94,6 +95,7 @@ export class LoginUsagePage implements Page {
   private report: UsageReport | null;
   private problem: string | null = null;
   private again = 0;
+  private left = false;
   /** Whether the use was asked for since the page opened. */
   private asked = false;
   private view: { tab: Tab; unit: Unit } = kept();
@@ -127,6 +129,7 @@ export class LoginUsagePage implements Page {
     this.resize = new ResizeObserver(() => {
       const figure = this.body.querySelector<HTMLElement>(".ledger-figure");
       if (figure && (Math.abs(figure.clientWidth - this.width) >= 1 || Math.abs(figure.clientHeight - this.height) >= 1)) this.draw();
+      fitInks(this.body);
     });
     this.resize.observe(this.body);
     this.stop = effect(() => {
@@ -138,6 +141,7 @@ export class LoginUsagePage implements Page {
   }
 
   leave(): void {
+    this.left = true;
     this.stop();
     this.resize.disconnect();
     clearTimeout(this.again);
@@ -161,6 +165,8 @@ export class LoginUsagePage implements Page {
       this.problem = null;
     });
     const [, used] = await Promise.allSettled([record, report]);
+    // Left while it read: nothing more is drawn or asked.
+    if (this.left) return;
     if (used.status === "rejected") this.problem = detailOf(used.reason);
     this.draw();
     if (this.calls?.element.isConnected) void this.calls.again();
@@ -227,7 +233,7 @@ export class LoginUsagePage implements Page {
       const foot = calls && !mine ? "" : `${this.where(went, unit)}${this.models(went, unit, amounts, only?.ink)}`;
       html = `<div class="ledger-sheet${mine ? " alone" : ""}${calls ? " calls" : ""}">${this.strip(usage, login?.limits ?? null, unit, amounts, mine, only, caps, now)}
         ${this.tabs(usage, tab, mine, caps)}
-        ${calls ? `<section class="ledger-panel" data-calls></section>` : `<section class="ledger-panel">${this.panel(usage, tab, only, looked, caps, unit, amounts, now)}</section>`}
+        ${calls ? `<section class="ledger-panel" data-calls></section>` : `<section class="ledger-panel">${this.narrow() ? this.panel(usage, tab, only, looked, caps, unit, amounts, now).replace('<div class="ledger-panel-head">', `<div class="ledger-panel-head">${this.unitSwitch(usage, tab)}`) : this.panel(usage, tab, only, looked, caps, unit, amounts, now)}</section>`}
         ${foot}
         ${this.problem ? `<p class="feature-note ledger-problem" title="${escape(this.problem)}">${escape(words.failed)}</p>` : ""}</div>`;
     }
@@ -253,6 +259,7 @@ export class LoginUsagePage implements Page {
       this.calls.placed(context);
     }
     this.body.scrollTop = top;
+    fitInks(this.body);
     // The figure's size is known once it is laid out: a first drawing at a
     // guess is drawn again, once, at the size it has.
     const figure = this.body.querySelector<HTMLElement>(".ledger-figure");
@@ -270,7 +277,7 @@ export class LoginUsagePage implements Page {
     const token = identity?.method === "oauth_token";
     const plan = identity?.plan ?? null;
     const title = this.element.querySelector<HTMLElement>(".ledger-title")!;
-    const html = `${glyph(options.agent, 18)}<span class="ledger-who" title="${escape(options.dir)}">${escape(this.who())}</span>${plan ? `<span class="tag">${escape(planName(plan))}</span>` : ""}${token ? `<span class="tag tag-token" title="${escape(options.logins.tokenSaid)}">${escape(options.logins.token)}</span>` : ""}<span class="ledger-machine">${glyph("machine", 14)}${escape(options.machine)}</span>${this.assistedTag(login)}`;
+    const html = `${glyph(options.agent, 18)}<span class="ledger-who" title="${escape(options.dir)}">${escape(this.who())}</span>${plan ? `<span class="tag">${escape(planName(plan))}</span>` : ""}${token ? `<span class="tag tag-token" title="${escape(options.logins.tokenSaid)}">${escape(options.logins.token)}</span>` : ""}${assistingOwner(options.store.world.peek(), options.machine) === null ? `<span class="ledger-machine">${glyph("machine", 14)}${escape(options.machine)}</span>` : ""}${this.assistedTag(login)}`;
     if (title.innerHTML !== html) title.innerHTML = html;
   }
 
@@ -364,7 +371,7 @@ export class LoginUsagePage implements Page {
     const known = limits?.kind === "known" ? limits.value : null;
     const week = current(usage);
     const rows = [300, 10080].map((minutes) => {
-      const window = known?.windows.find((one) => one.minutes === minutes || one.name.startsWith(minutes === 300 ? "five_hour" : "seven_day")) ?? null;
+      const window = known ? windowOf(known.windows, minutes) : null;
       // A reading without this window: the account has none.
       if (known && !window) return "";
       if (minutes === 300 || !week?.parts.size) return this.windowMeter(minutes, window, known?.observed_at ?? null, now, [], []);
@@ -400,21 +407,22 @@ export class LoginUsagePage implements Page {
   }
 
   /** What one assisted has spent against their allowances: a day's, a
-   *  week's and Fable's, half the week's (`world-usage.md`, 协助的上限). */
-  private capMeters(usage: Usage, person: Person | null, caps: Caps, ink: string | null): string {
+   *  week's and Fable's, half the week's (`world-usage.md`, 协助的上限).
+   *  The one their own row already shows is `shown`. */
+  private capMeters(usage: Usage, person: Person | null, caps: Caps, ink: string | null, shown: "weekly" | "daily" | null = null): string {
     const { words } = this.options;
     const seed = `${this.key}:cap:${person?.key ?? ""}`;
     const parts = (share: number): RingPart[] => (ink ? [{ share, ink }] : []);
     const row = (name: string, spent: number, cap: number, said: string, suffix: string) =>
       this.meterRow({ name, share: spent / cap, parts: parts(spent / cap), note: escape(words.capOf(words.money(spent), wholeDollars(cap))), said, seed: seed + suffix, unread: false });
     const rows: string[] = [];
-    if (caps.daily) {
+    if (caps.daily && shown !== "daily") {
       const spent = person?.day?.usd ?? 0;
       rows.push(row(words.dayCap, spent, caps.daily, words.dayCapSaid(wholeDollars(caps.daily), words.money(spent)), ":day"));
     }
     if (caps.weekly) {
       const spent = person?.week.usd ?? 0;
-      rows.push(row(words.weekCap, spent, caps.weekly, [words.weekCapSaid(wholeDollars(caps.weekly), words.money(spent)), words.weekSpan(new Date(usage.week.start), new Date(usage.week.end))].join("\n"), ":week"));
+      if (shown !== "weekly") rows.push(row(words.weekCap, spent, caps.weekly, [words.weekCapSaid(wholeDollars(caps.weekly), words.money(spent)), words.weekSpan(new Date(usage.week.start), new Date(usage.week.end))].join("\n"), ":week"));
       if (person?.fable?.usd != null) rows.push(row(words.fable, person.fable.usd, caps.weekly / 2, words.fableCapSaid(wholeDollars(caps.weekly / 2), words.money(person.fable.usd)), ":fable"));
     }
     return rows.join("");
@@ -440,16 +448,18 @@ export class LoginUsagePage implements Page {
   }
 
   /** Who used it this week, a row each under the seven-day bar: their bar
-   *  in their ink against the window, their part of it, and what they
-   *  spent; on what terms, and when an assistance ends, a hover away. The
-   *  one picked has their allowances under their row. One alone has
-   *  nothing to tell apart: the seven-day bar is theirs. */
+   *  in their ink against their own allowance, the week's where they have
+   *  one, else the day's, and what they spent of it; one without an
+   *  allowance has only what they spent. Each one's part of the whole
+   *  login is the seven-day bar's above; it, their terms and when an
+   *  assistance ends are a hover away. The one picked has their other
+   *  allowances under their row, the block pressed anywhere to close it.
+   *  One alone has nothing to tell apart: the seven-day bar is theirs. */
   private peopleRows(usage: Usage, unit: Unit, amounts: Amounts, caps: Caps | null): string {
     const { words } = this.options;
     if (usage.people.length < 2) return "";
     const week = current(usage);
     const parted = week?.reached !== null && week?.reached !== undefined;
-    const most = Math.max(1e-9, ...usage.people.map((person) => valueOf(person.week, unit)));
     const clock = this.options.store.clock.peek();
     // Past five, the first four by use and the one picked are rows, the rest
     // one row together until unfolded.
@@ -464,27 +474,35 @@ export class LoginUsagePage implements Page {
         const part = parted ? (week!.parts.get(person.index) ?? 0) : null;
         const picked = this.only === person.key;
         const said = [words.spentWeek(person.name, value ? amounts.say(value) : "–"), part === null ? "" : words.partSaid(person.name, Math.round(part * 100)), ...terms].filter(Boolean).join("\n");
-        // Against the seven-day window where each one's part of it is known,
-        // else against the most anyone used.
-        const share = part ?? value / most;
+        const own = this.capsOf(assisted);
+        const shown = own?.weekly ? "weekly" : own?.daily ? "daily" : null;
+        const cap = shown === "weekly" ? { cap: own!.weekly!, spent: person.week.usd ?? 0 } : shown === "daily" ? { cap: own!.daily!, spent: person.day?.usd ?? 0 } : null;
+        // Each one's bar is their part of the login's seven days, as long as
+        // their part of the bar above; an allowance of their own is said
+        // beside it, in caution as it runs out, and drawn when they are
+        // picked (`capMeters`).
+        const spent = cap ? cap.spent / cap.cap : null;
+        const level = spent === null ? "" : spent >= 1 ? " spent" : spent >= 0.9 ? " high" : "";
         const ends = assisted?.until ? glyph("history", 12) : "";
         const row = `<button class="ledger-meter ledger-person${picked ? " on" : ""}" type="button" data-only="${escape(person.key)}" title="${escape(said)}">
           <span class="ledger-meter-name ledger-person-name"><span>${escape(person.name)}</span>${ends}</span>
-          <span class="ledger-meter-track">${meter(share, `${this.key}:person:${person.key}`, [{ share, ink: person.ink }], false)}</span>
+          <span class="ledger-meter-track">${part === null ? "" : meter(part, `${this.key}:person:${person.key}`, [{ share: part, ink: person.ink }], false)}</span>
           <span class="ledger-meter-used">${part === null ? "" : `${Math.round(part * 100)}%`}</span>
-          <span class="ledger-meter-note">${escape(value ? amounts.say(value) : "–")}</span>
+          <span class="ledger-meter-note${level}">${escape(cap ? words.capOf(words.money(cap.spent), wholeDollars(cap.cap)) : value ? amounts.say(value) : "–")}</span>
         </button>`;
-        return picked && caps ? `<div class="ledger-group">${row}${this.capMeters(usage, person, caps, person.ink)}</div>` : row;
+        const more = picked && caps ? this.capMeters(usage, person, caps, person.ink, shown) : "";
+        return more ? `<div class="ledger-group" data-only="${escape(person.key)}">${row}${more}</div>` : row;
       })
       .join("");
     if (rest.length) {
+      // Together they have no one allowance: what they spent, each a hover away.
       const value = rest.reduce((sum, person) => sum + valueOf(person.week, unit), 0);
-      const part = parted ? rest.reduce((sum, person) => sum + (week!.parts.get(person.index) ?? 0), 0) : null;
-      const share = part ?? value / most;
       const said = rest.map((person) => words.spentWeek(person.name, amounts.say(valueOf(person.week, unit)))).join("\n");
+      // Their parts of the seven days together, in graphite: no one's ink.
+      const part = parted ? rest.reduce((sum, person) => sum + (week!.parts.get(person.index) ?? 0), 0) : null;
       return `${rows}<button class="ledger-meter ledger-person ledger-others" type="button" data-everyone="1" title="${escape(said)}">
           <span class="ledger-meter-name ledger-person-name"><span>${escape(words.others(rest.length))}</span></span>
-          <span class="ledger-meter-track">${meter(share, `${this.key}:others`, [{ share, ink: "var(--pen-graphite)" }], false)}</span>
+          <span class="ledger-meter-track">${part === null ? "" : meter(part, `${this.key}:others`, [{ share: part, ink: "color-mix(in srgb, var(--pen-graphite) 70%, var(--bg))" }], false)}</span>
           <span class="ledger-meter-used">${part === null ? "" : `${Math.round(part * 100)}%`}</span>
           <span class="ledger-meter-note">${escape(amounts.say(value))}</span>
         </button>`;
@@ -492,14 +510,28 @@ export class LoginUsagePage implements Page {
     return folds ? `${rows}<button class="ledger-fewer" type="button" data-everyone="0">${escape(words.fewer)}</button>` : rows;
   }
 
+  /** The drawings' tabs, and beside them the unit, except on a phone,
+   *  where the tabs take the row and the unit goes to the drawing's head
+   *  (`unitSwitch`). */
   private tabs(usage: Usage, current_: Tab, mine: Mine | null, caps: Caps | null): string {
     const { words } = this.options;
     const shown = TABS.filter((tab) => tab !== "quota" || !mine || caps?.weekly);
     const tab = (value: Tab) => `<button type="button" role="tab" class="${current_ === value ? "current" : ""}" aria-selected="${current_ === value}" data-view="tab:${value}">${escape(words.tabs[value])}</button>`;
-    const unit = usage.usd && current_ !== "quota" && current_ !== "calls"
-      ? `<div class="ledger-switch" role="group">${(["usd", "tokens"] as const).map((value) => `<button type="button" class="${this.view.unit === value ? "current" : ""}" aria-pressed="${this.view.unit === value}" data-view="unit:${value}">${escape(value === "usd" ? words.usd : words.tokenTab)}</button>`).join("")}</div>`
+    return `<div class="ledger-tabs"><div class="ledger-switch ledger-tablist" role="tablist">${shown.map(tab).join("")}</div>${this.narrow() ? "" : this.unitSwitch(usage, current_)}</div>`;
+  }
+
+  /** Dollars or tokens, where the drawing shown is in either. */
+  private unitSwitch(usage: Usage, tab: Tab): string {
+    const { words } = this.options;
+    return usage.usd && tab !== "quota" && tab !== "calls"
+      ? `<div class="ledger-switch ledger-units" role="group">${(["usd", "tokens"] as const).map((value) => `<button type="button" class="${this.view.unit === value ? "current" : ""}" aria-pressed="${this.view.unit === value}" data-view="unit:${value}">${escape(value === "usd" ? words.usd : words.tokenTab)}</button>`).join("")}</div>`
       : "";
-    return `<div class="ledger-tabs"><div class="ledger-switch" role="tablist">${shown.map(tab).join("")}</div>${unit}</div>`;
+  }
+
+  /** Whether the page is as narrow as a phone's (the sheet's own break). */
+  private narrow(): boolean {
+    const width = this.element.clientWidth;
+    return width > 0 && width <= 600;
   }
 
   /** The drawing chosen, at the width it has, narrowed to the one picked. */
@@ -573,7 +605,7 @@ export class LoginUsagePage implements Page {
     // Where the page counts the machine's own sessions as its owner's, the
     // machine cannot narrow to both at once: the rows are narrowed here.
     const local = !!only && name(null).key === only.key;
-    const person = mine || !only ? undefined : { key: only.key, account: local ? null : { account: accountOf(only.key) } };
+    const person = mine || !only ? undefined : { key: only.key, account: { account: accountOf(only.key), ...(local ? { with_machine: true } : {}) }, local };
     return { who, several: !mine && usage.people.length > 1, person, models: usage.week.models.map((one) => one.model), now };
   }
 

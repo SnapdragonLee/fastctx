@@ -18,6 +18,7 @@
 //! Run with Claude Code 2.1.289.
 
 pub(crate) mod calls;
+mod catalog;
 pub(crate) mod control;
 mod fork;
 mod fork_attachments;
@@ -27,6 +28,7 @@ mod fork_source;
 pub(crate) mod garbage;
 pub(crate) mod history;
 mod image_records;
+mod resume;
 pub(crate) use image_records::paths as image_records;
 mod image_flush;
 pub(crate) use image_flush::wait_for_image;
@@ -1088,8 +1090,11 @@ pub async fn deliver(
     if let Err(error) = crate::inbox::target(directory, &pending.delivery.id, &session) {
         return Some(Err(Failure::new(error.to_string())));
     }
-    let asleep = node.residents.now(to).is_some_and(|now| now.activity == Activity::Asleep);
-    let stopped_background = if !about.world_started && asleep {
+    let alive = match alive(node, about.home.as_deref(), &session).await {
+        Ok(alive) => alive,
+        Err(error) => return Some(Err(error)),
+    };
+    let stopped_background = if !about.world_started && !alive {
         match management::background_session(node, about.home.as_deref(), &session).await {
             Ok(found) => found.is_some(),
             Err(error) => return Some(Err(error)),
@@ -1097,19 +1102,20 @@ pub async fn deliver(
     } else {
         false
     };
-    if !about.world_started && !stopped_background {
-        // The user's own session: whatever its state, its mod hands this over
-        // when the session runs, and when the user opens it again.
+    let user_action =
+        matches!(pending.delivery.notice, Notice::Words { from: Speaker::User { .. }, .. } | Notice::Attached { .. });
+    if !about.world_started && !stopped_background && !user_action {
+        // Facts wait for a closed foreground session; only the user resumes it.
         return Some(into_inbox(node, to, &session, directory, pending));
     }
-    Some(match alive(node, about.home.as_deref(), &session).await {
-        Ok(true) => into_inbox(node, to, &session, directory, pending),
+    Some(match alive {
+        true => into_inbox(node, to, &session, directory, pending),
         // What rides with the next turn wakes nobody: it waits for the turn
         // that wakes it, and goes in then (`speech::along`).
-        Ok(false) if pending.delivery.notice.along().is_some() => Ok(Landed::Waiting { why: None, answered: true }),
+        false if pending.delivery.notice.along().is_some() => Ok(Landed::Waiting { why: None, answered: true }),
         // Its supervisor stopped it: the words wake it, as they are, and its
         // next turn takes them.
-        Ok(false) => {
+        false => {
             let (text, as_user) = words(&pending.delivery.notice);
             if as_user {
                 node.claude.handing(to, &text);
@@ -1132,6 +1138,7 @@ pub async fn deliver(
                 Ok(true) => {
                     match wake(
                         node,
+                        to,
                         about.home.as_deref(),
                         &session,
                         if as_user { text } else { claude::framed(&text) },
@@ -1150,7 +1157,6 @@ pub async fn deliver(
                 Err(error) => Err(Failure::new(format!("keeping what wakes {to}: {error}"))),
             }
         }
-        Err(failure) => Err(failure),
     })
 }
 
@@ -1250,15 +1256,19 @@ fn words(notice: &Notice) -> (String, bool) {
 /// Whether the session's process is alive, to hand it words: its mod named
 /// that process when it registered, so no `claude` command runs for each
 /// delivery. A session not heard since this node started is asked of
-/// Claude Code itself.
+/// Claude Code itself, and so is one whose registered process is gone:
+/// Claude Code's daemon may have started it again, its mod not registered
+/// yet, and waking it then would start a copy.
 async fn alive(node: &Arc<Node>, home: Option<&Path>, session: &str) -> Result<bool, Failure> {
     let registration =
         node.claude.state.lock().expect("never poisoned").sessions.get(session).map(|entry| entry.registration.clone());
-    match registration {
-        Some(registration) => pairing::present(node, &registration)
-            .map_err(|error| Failure::new(format!("checking whether the Claude session runs: {error}"))),
-        None => running(node, home, session).await,
+    if let Some(registration) = registration
+        && pairing::present(node, &registration)
+            .map_err(|error| Failure::new(format!("checking whether the Claude session runs: {error}")))?
+    {
+        return Ok(true);
     }
+    running(node, home, session).await
 }
 
 /// Whether the background session, of the home `home`, has a running
@@ -1278,28 +1288,51 @@ async fn running(node: &Arc<Node>, home: Option<&Path>, session: &str) -> Result
 
 async fn wake(
     node: &Arc<Node>,
+    resident: &ResidentId,
     home: Option<&Path>,
     session: &str,
     words: String,
     id: fastctx_types::NoticeId,
 ) -> Result<Landed, Failure> {
-    let launching = command(node, home)?;
+    let mut launching = command(node, home)?;
+    launching.cwd = resume_dir(node, session);
     oldest::check(node, &launching).await?;
+    let observing = launching.clone();
     let Command { program, cwd, env } = launching;
     if let Some(resident) = node.residents.resident_of_thread(session) {
         crate::profile::session::claude(node, &resident, false)?;
     }
     let args = background::wake_args(session, &words);
-    let world = node.world.path().to_path_buf();
     // Not tried twice: a resume refused for trust may already have queued
     // the words.
     tokio::task::spawn_blocking(fastctx_platform::doing::carried(move || {
-        trust(&[world.as_path()], &env).and_then(|()| background::claude(&program, &args, &cwd, &env))
+        trust(&[cwd.as_path()], &env).and_then(|()| background::claude(&program, &args, &cwd, &env))
     }))
     .await
     .map_err(|error| Failure::new(format!("waking the session: {error}")))?
     .map_err(Failure::new)?;
+    // Claude Code took the words; the session that takes them may still end
+    // before the World's plugin pairs, which only watching it tells.
+    startup::observe(node, resident, id.clone(), observing, true);
     Ok(Landed::Handed { id })
+}
+
+/// Where a session is resumed from: the directory it was opened in, as its
+/// registration says, so its own tools go on working there; the World's
+/// directory where it was opened in the user's home, which Claude Code
+/// cannot keep trusted, or where nothing says.
+pub(crate) fn resume_dir(node: &Node, session: &str) -> PathBuf {
+    let opened = exchange::registration(&exchange::sessions(node.world.path()).join(session))
+        .ok()
+        .flatten()
+        .and_then(|registration| registration.cwd)
+        .map(PathBuf::from)
+        .filter(|directory| directory.is_dir());
+    let home = fastctx_platform::user_home().ok();
+    match opened {
+        Some(directory) if home.as_deref().is_none_or(|home| !crate::homes::same_dir(&directory, home)) => directory,
+        _ => node.world.path().to_path_buf(),
+    }
 }
 
 /// The `claude` command, where to run it, and the environment it gets: the
@@ -1372,7 +1405,7 @@ pub async fn open_here(
     // A login assisting another account starts without the browser of this
     // machine (`background::Start::assisting`).
     crate::profile::session::ready(node, &opened.acting).await?;
-    let assisting = node.works_here(&opened.acting).is_err();
+    let assisting = crate::assists::host::starting(node, &id, &opened.acting)?;
     let (words, heard) =
         crate::colleagues::instructions(node, &id, town.as_ref(), &Origin::User, &opened.acting, false).await?;
     // What it is told of its machines and folders its plugin adds to the
@@ -1380,6 +1413,7 @@ pub async fn open_here(
     crate::focus::open(node, &node.world.conversation(&id), &opened.acting, &opened.focus).await?;
     let born_at = Timestamp::now();
     let about = About {
+        forked_from: None,
         mcp_off: options.mcp_off.clone(),
         id: id.clone(),
         host: Host { agent, client: "claude-code".to_string(), version: String::new() },
@@ -1497,7 +1531,7 @@ pub async fn open_here(
         .map_err(|error| Failure::new(format!("recording which session {id} is: {error}")))?;
     drop(_birth);
     replay(node).await;
-    startup::observe(node, &id, first.delivery.id.clone(), launching);
+    startup::observe(node, &id, first.delivery.id.clone(), launching, false);
     Ok((id, Landed::Handed { id: first.delivery.id }))
 }
 

@@ -15,6 +15,10 @@ import { enMoment, zhMoment } from "./when-words";
 import { en as conversationEn, zh as conversationZh } from "../words";
 
 export interface ShellWords {
+  /** An agent assisting the user, as whose it is, never its machine. */
+  someoneAssisting(agent: string, owner: string): string;
+  /** A conversation forked from another. */
+  forked: string;
   app: string;
   world: string;
   projects: string;
@@ -214,6 +218,8 @@ export interface NewTalkWords {
   assistantWorks(owner: string): string;
   /** An agent assisting the account, whose it is. */
   assistFrom(owner: string): string;
+  /** Where an assisting agent is listed: whose agents, never its machine. */
+  assistAgents(owner: string): string;
   /** When an assistance ends. */
   assistUntil(at: Date, now: Date): string;
   /** An assisting agent was given files other than images, and no machine of
@@ -266,8 +272,9 @@ export const zhNewTalk: NewTalkWords = {
   limitReset: "已重置",
   token: "长期令牌",
   account: "账号",
-  assistantWorks: (owner) => `来自 ${owner}，在你的机器上工作，不接触 ${owner} 的电脑`,
+  assistantWorks: (owner) => `来自 ${owner}，在你的机器上工作`,
   assistFrom: (owner) => `来自 ${owner}`,
+  assistAgents: (owner) => `${owner} 的智能体`,
   assistUntil: (at, now) => `到 ${zhMoment.short(at, now)}`,
   noFilePlace: "没有能放文件的机器",
   project: "项目",
@@ -309,8 +316,9 @@ export const enNewTalk: NewTalkWords = {
   limitReset: "reset",
   token: "Token",
   account: "Account",
-  assistantWorks: (owner) => `From ${owner}; works on your machines, never on ${owner}'s computer`,
+  assistantWorks: (owner) => `From ${owner}; works on your machines`,
   assistFrom: (owner) => `from ${owner}`,
+  assistAgents: (owner) => `${owner}'s agents`,
   assistUntil: (at, now) => `until ${enMoment.short(at, now)}`,
   noFilePlace: "No machine can take the files",
   project: "Project",
@@ -1072,6 +1080,17 @@ export interface ComposerWords {
   forkGo: string;
   never: string;
   unknown(name: string): string;
+  /** A command that waits for the turn under way to end. */
+  afterTurn(name: string): string;
+  /** A command the node took to do once the turn ends: beside it while it
+   *  is done; withdrawing one; and one whose host did not say what came
+   *  of it. */
+  nowRunning: string;
+  withdraw: string;
+  unknownOutcome(name: string): string;
+  /** What the conversation offers could not be read: a command typed is
+   *  kept in the box, not sent. */
+  noCommands: string;
   running(name: string): string;
   done(name: string): string;
   /** Carried out, with no word from the host on whether it took. */
@@ -1292,6 +1311,11 @@ export const zhComposer: ComposerWords = {
   forkGo: "分叉",
   never: "取消",
   unknown: (name) => `未知命令 /${name}`,
+  afterTurn: (name) => `这一轮结束后才能 /${name}`,
+  nowRunning: "正在做",
+  withdraw: "撤回",
+  unknownOutcome: (name) => `/${name} 不确定做成了没有`,
+  noCommands: "没读到这段对话能用的命令，命令没送出",
   running: (name) => `正在执行 /${name}…`,
   done: (name) => `/${name} 已完成`,
   reported: (name) => `/${name} 已执行`,
@@ -1505,6 +1529,11 @@ export const enComposer: ComposerWords = {
   forkGo: "Fork",
   never: "Cancel",
   unknown: (name) => `Unknown command /${name}`,
+  afterTurn: (name) => `/${name} can run once this turn ends`,
+  nowRunning: "Running",
+  withdraw: "Withdraw",
+  unknownOutcome: (name) => `Not sure whether /${name} went through`,
+  noCommands: "Couldn't read this conversation's commands; the command wasn't sent",
   running: (name) => `Running /${name}…`,
   done: (name) => `/${name} done`,
   reported: (name) => `/${name} ran`,
@@ -1631,6 +1660,8 @@ export const zhShell: ShellWords = {
   foldSidebar: "隐藏侧栏",
   backTo: (page) => `返回${page}`,
   someone: (agent, machine) => `${machine} 上的 ${agent}`,
+  someoneAssisting: (agent, owner) => `${owner} 的 ${agent}`,
+  forked: "分叉出来的对话",
   colleagueFor: (asker) => `${asker} 调用的模型`,
   busy: (lasted) => `工作中　${lasted}`,
   idle: "空闲",
@@ -1682,6 +1713,8 @@ export const enShell: ShellWords = {
   foldSidebar: "Hide sidebar",
   backTo: (page) => `Back to ${page}`,
   someone: (agent, machine) => `${agent} on ${machine}`,
+  someoneAssisting: (agent, owner) => `${owner}'s ${agent}`,
+  forked: "Forked from another conversation",
   colleagueFor: (asker) => `called by ${asker}`,
   busy: (lasted) => `working, ${lasted}`,
   idle: "idle",

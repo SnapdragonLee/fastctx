@@ -302,6 +302,11 @@ pub enum RemoteCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    /// Whether each stored attachment still has a live conversation reference at its home.
+    AttachmentReferences {
+        conversation: crate::Address,
+        attachments: Vec<crate::attachments::Attachment>,
+    },
     /// Reserve metadata at the conversation's home; bytes stay with the caller.
     ReserveAttachment {
         target: crate::attachments::UploadTarget,
@@ -427,6 +432,9 @@ pub enum RemoteCall {
     Stats {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<jiff::Timestamp>,
+        /// What the last reading told, to bring only what came after it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seen: Option<crate::stats::StatsSeen>,
     },
     /// That machine's network addresses, as a place for the hub
     /// (`crate::hub_move`). A machine that cannot take the hub does not
@@ -538,6 +546,7 @@ impl RemoteCall {
             | RemoteCall::Who { .. }
             | RemoteCall::Since { .. }
             | RemoteCall::Facts
+            | RemoteCall::AttachmentReferences { .. }
             | RemoteCall::Interfaces
             | RemoteCall::Relay { .. } => Purpose::Look,
         }
@@ -630,6 +639,9 @@ pub enum RemoteReply {
     /// A conversation's setting there changed as asked.
     Set,
     Facts(MachineFacts),
+    AttachmentReferences {
+        used: Vec<bool>,
+    },
     Stats(Box<crate::stats::MachineStats>),
     /// How updates stand on that machine after it was asked to update.
     Update(Box<crate::update::State>),

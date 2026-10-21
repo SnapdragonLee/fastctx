@@ -6,9 +6,8 @@
 
 use std::io;
 
-use fastctx_types::layout::WorldDir;
 use fastctx_types::project::{Record, Writer};
-use fastctx_types::{Address, MachineName, ResidentId, TownName};
+use fastctx_types::{Address, ResidentId, TownName};
 
 use crate::Node;
 use crate::residents::Heard;
@@ -52,14 +51,14 @@ fn project_notes(node: &Node, id: &ResidentId) -> io::Result<(Vec<String>, Optio
     };
     let now = Heard { user_prompt: None, town: town.clone(), ledger };
     let notes = match node.residents.heard(id) {
-        None => vec![introduction(&node.world, id, &here, town.as_ref())?],
+        None => vec![introduction(node, id, town.as_ref())?],
         // It moved: entering gave it the new town's record.
         Some(heard) if heard.town != town => Vec::new(),
         Some(heard) if heard.ledger >= ledger => return Ok((Vec::new(), None)),
         Some(heard) => {
             let me = Address { machine: here.clone(), resident: id.clone() };
             match &town {
-                Some(town) => news(&node.world, town, heard.ledger, &me)?.into_iter().collect(),
+                Some(town) => news(node, id, town, heard.ledger, &me)?.into_iter().collect(),
                 None => Vec::new(),
             }
         }
@@ -67,17 +66,14 @@ fn project_notes(node: &Node, id: &ResidentId) -> io::Result<(Vec<String>, Optio
     Ok((notes, Some(now)))
 }
 
-fn introduction(world: &WorldDir, id: &ResidentId, here: &MachineName, town: Option<&TownName>) -> io::Result<String> {
-    let on = format!(" on {here}");
+fn introduction(node: &Node, id: &ResidentId, town: Option<&TownName>) -> io::Result<String> {
     Ok(match town {
-        Some(town) => match super::instructions::text(world, town)? {
-            Some(record) => format!("=== you are {id}{on}, working in the project {town} ===\n{record}"),
-            None => {
-                format!("=== you are {id}{on}, working in the project {town}; its record: `fastctx project show` ===")
-            }
+        Some(town) => match super::instructions::text(node, town, &super::instructions::acting(node, id))? {
+            Some(record) => format!("=== you are {id}, working in the project {town} ===\n{record}"),
+            None => format!("=== you are {id}, working in the project {town}; its record: `fastctx project show` ==="),
         },
         // When to enter a project is said once, in the session's guidance.
-        None => format!("=== you are {id}{on}, in no project ==="),
+        None => format!("=== you are {id}, in no project ==="),
     })
 }
 
@@ -86,7 +82,8 @@ fn introduction(world: &WorldDir, id: &ResidentId, here: &MachineName, town: Opt
 /// with the user's instructions in it. Journals are project memory, which
 /// is not wired in until it is finished (`world-journals.md`), so their
 /// news is not told.
-fn news(world: &WorldDir, town: &TownName, after: u64, me: &Address) -> io::Result<Option<String>> {
+fn news(node: &Node, id: &ResidentId, town: &TownName, after: u64, me: &Address) -> io::Result<Option<String>> {
+    let world = &node.world;
     let mine = |by: &Writer| matches!(by, Writer::Resident { address } if address == me);
     let ledger = world.town(town).ledger();
     let mut record: Option<u32> = None;
@@ -102,7 +99,7 @@ fn news(world: &WorldDir, town: &TownName, after: u64, me: &Address) -> io::Resu
         }
     }
     let Some(version) = record else { return Ok(None) };
-    Ok(Some(match super::instructions::text(world, town)? {
+    Ok(Some(match super::instructions::text(node, town, &super::instructions::acting(node, id))? {
         Some(record) => format!(
             "=== the project {town} changed since you last heard; its record now, which replaces the one you were given ===\n{record}"
         ),

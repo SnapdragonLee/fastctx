@@ -27,12 +27,18 @@ export interface Offered {
   minimum: string | null;
 }
 
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
 export class Updates {
   readonly state: Signal<UpdateState | null> = signal<UpdateState | null>(null);
   readonly offered: Signal<Offered | null> = signal<Offered | null>(null, (a, b) => JSON.stringify(a) === JSON.stringify(b));
   private installing = false;
   private permission = false;
-  private failed: string | null = null;
+  /** What failed here, of which release: bringing it, or installing it. */
+  private failed: { version: string; step: "fetch" | "install"; why: string } | null = null;
+  /** A failed release tried again by itself: which, since when, how often. */
+  private retried = { version: "", at: 0, count: 0 };
   private timer: ReturnType<typeof setTimeout> | null = null;
   private known: string | null = null;
   /** What was last told the node of what only the interface knows. */
@@ -80,16 +86,19 @@ export class Updates {
   go(): void {
     const offered = this.offered.peek();
     if (!offered || this.installing) return;
+    const version = offered.manifest.version;
+    // What failed installing here is here already: it is installed again.
+    const installed = this.failed?.version === version && this.failed.step === "install";
     this.failed = null;
     this.permission = false;
-    if (offered.stage.kind === "ready" || offered.stage.kind === "waiting" || offered.stage.kind === "permission") {
-      this.install(offered.manifest.version);
+    if (installed || offered.stage.kind === "ready" || offered.stage.kind === "waiting" || offered.stage.kind === "permission") {
+      this.install(version);
       return;
     }
-    void this.seam.fetch(offered.manifest.version).then(
+    void this.seam.fetch(version).then(
       (state) => this.take(state),
       (error: unknown) => {
-        this.failed = String(error);
+        this.failed = { version, step: "fetch", why: String(error) };
         this.refresh();
       },
     );
@@ -108,7 +117,7 @@ export class Updates {
       },
       (error: unknown) => {
         this.installing = false;
-        this.failed = String(error);
+        this.failed = { version, step: "install", why: String(error) };
         this.refresh();
       },
     );
@@ -142,7 +151,7 @@ export class Updates {
     const offered = state ? this.offerOf(state) : null;
     this.offered.set(offered);
     if (state) this.tell(state, offered);
-    if (!state || !offered || this.installing || this.failed) return;
+    if (!state || !offered || this.installing) return;
     const asked = state.take === offered.manifest.version;
     // The node says which release automatic updates may take; a node before
     // it said so is reckoned with here, under the hubs' major version.
@@ -153,6 +162,27 @@ export class Updates {
     if (!asked && !(this.automatic(state) && within)) return;
     if (offered.stage.kind === "offered") this.go();
     else if (offered.stage.kind === "waiting" && this.idle()) this.install(offered.manifest.version);
+    else if (offered.stage.kind === "failed" && this.due(state, offered.manifest.version)) {
+      this.retried = { version: offered.manifest.version, at: Date.now(), count: this.retried.count + 1 };
+      // What failed here is asked again as it now stands: a package kept
+      // here is installed, not brought again.
+      if (this.failed) {
+        this.failed = null;
+        this.refresh();
+      } else this.go();
+    }
+  }
+
+  /** Whether a failed release is tried again by itself now: when its node
+   *  says, or else an hour after it failed, then two, four, up to a day,
+   *  so a machine nobody tends is never left behind by one failure. */
+  private due(state: UpdateState, version: string): boolean {
+    const now = Date.now();
+    if (this.retried.version !== version) this.retried = { version, at: now, count: 0 };
+    // Never more than once an hour from here, whatever the node says.
+    const since = this.retried.count ? now - this.retried.at : Infinity;
+    if (this.failed?.version !== version && state.retry_at) return Date.parse(state.retry_at) <= now && since >= HOUR;
+    return now >= this.retried.at + Math.min(HOUR * 2 ** this.retried.count, DAY);
   }
 
   /** Tells the node that an update waits here for the work under way, or
@@ -183,7 +213,8 @@ export class Updates {
     const below = minimum && compareVersions(this.version, minimum) < 0 ? minimum : null;
     const base = { manifest, size: pack.size ?? null, minimum: below };
     if (this.installing) return { ...base, stage: { kind: "installing" } };
-    if (this.failed) return { ...base, stage: { kind: "failed", why: this.failed } };
+    // A failure here is of its release alone: a newer one is offered afresh.
+    if (this.failed?.version === manifest.version) return { ...base, stage: { kind: "failed", why: this.failed.why } };
     const fetching = state.fetching;
     if (fetching && fetching.version === manifest.version && fetching.target === target) {
       return {

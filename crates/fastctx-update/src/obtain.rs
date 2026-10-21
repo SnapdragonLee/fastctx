@@ -40,12 +40,12 @@ pub async fn obtain(
     cache: &Cache,
     manifest: &Manifest,
     target: &str,
-    link: Option<&Link>,
+    links: &[&Link],
     network_now: bool,
     progress: &mut (dyn FnMut(Progress) + Send),
 ) -> Result<Brought, Problem> {
     static POOL: std::sync::OnceLock<crate::pool::Pool> = std::sync::OnceLock::new();
-    let logger = link.cloned();
+    let logger = links.first().map(|link| (*link).clone());
     let log: Log = std::sync::Arc::new(move |message| {
         if let Some(link) = &logger {
             link.log_package(message);
@@ -53,7 +53,7 @@ pub async fn obtain(
             eprintln!("{message}");
         }
     });
-    POOL.get_or_init(Default::default).obtain(cache, manifest, target, link, network_now, None, progress, log).await
+    POOL.get_or_init(Default::default).obtain(cache, manifest, target, links, network_now, None, progress, log).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -82,12 +82,40 @@ pub(crate) async fn run(
         *github_total.lock().expect("never poisoned") = total;
         shown.lock().expect("never poisoned").tell(Via::Github, received, total);
     };
+    // The network's source asks each hub that keeps versions in turn.
     let hub = async {
-        let link = request.link.as_ref().ok_or("no hub supplies packages")?;
-        let ready = || {};
-        from_hub(link, version, target, package.size, hub_file, &mut hub_heard, &ready).await?;
-        verified(hub_file, &package.signature, version).await?;
-        Ok::<_, Problem>(())
+        let mut failures = Vec::new();
+        for link in &request.links {
+            let result = async {
+                if !matches!(link.status(), fastctx_net::link::Status::Online { .. }) {
+                    return Err(Problem::from("not connected to the hub"));
+                }
+                hub_heard(0, package.size);
+                from_hub(link, version, target, package.size, hub_file, &mut hub_heard, &|| {}).await?;
+                verified(hub_file, &package.signature, version).await
+            }
+            .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(why) => {
+                    log(format!("bringing {target} of {version} through {}: {why}", link.hub_name()));
+                    failures.push(Problem::new(why.reason, format!("{}: {}", link.hub_name(), why.why)));
+                    match tokio::fs::remove_file(hub_file).await {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(Problem::new(FailureReason::Disk, error.to_string())),
+                    }
+                }
+            }
+        }
+        let reason = if failures.iter().any(|problem| problem.reason == FailureReason::Signature) {
+            FailureReason::Signature
+        } else if failures.iter().any(|problem| problem.reason == FailureReason::Disk) {
+            FailureReason::Disk
+        } else {
+            FailureReason::Other
+        };
+        Err(Problem::new(reason, failures.iter().map(|problem| problem.why.as_str()).collect::<Vec<_>>().join("; ")))
     };
     let local_source = local.clone();
     let github = async {
@@ -106,6 +134,8 @@ pub(crate) async fn run(
         Ok::<_, Problem>((speed, downloaded.then(jiff::Timestamp::now)))
     };
     tokio::pin!(hub, github);
+    // GitHub first, judged patiently; the network joins once GitHub fails or
+    // goes too slowly, or at once where the last check could not reach it.
     let (mut hub_going, mut github_going) = (false, true);
     let mut hub_tried = false;
     let mut failures = Vec::new();
@@ -118,7 +148,7 @@ pub(crate) async fn run(
             .expect("never poisoned")
             .verdict(Instant::now(), *github_total.lock().expect("never poisoned"));
         if !hub_tried
-            && request.link.is_some()
+            && !request.links.is_empty()
             && (request.network_now || !github_going || verdict != Verdict::Promising)
         {
             hub_tried = true;
@@ -153,7 +183,7 @@ pub(crate) async fn run(
             _ = tick.tick() => {}
             () = &mut deadline => return Err(Problem::new(FailureReason::Sources { sources: failures.iter().map(|(via,p)| SourceFailure { via: *via, why: p.why.clone() }).collect() }, format!("bringing {target} of {version} took more than 45 minutes"))),
         }
-        if !hub_going && !github_going && (hub_tried || request.link.is_none()) {
+        if !hub_going && !github_going && (hub_tried || request.links.is_empty()) {
             let reason = if failures.iter().any(|(_, p)| p.reason == FailureReason::Signature) {
                 FailureReason::Signature
             } else if failures.iter().any(|(_, p)| p.reason == FailureReason::Disk) {

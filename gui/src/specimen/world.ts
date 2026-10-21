@@ -32,7 +32,7 @@ function resident(
   town: string | null,
   model: string,
   born: string,
-  state: Partial<ResidentNow> & { origin?: About["origin"]; focus?: About["focus"] },
+  state: Partial<ResidentNow> & { origin?: About["origin"]; focus?: About["focus"]; forked_from?: About["forked_from"] },
 ): ResidentNow {
   return {
     about: {
@@ -46,6 +46,7 @@ function resident(
       model,
       acting: machine === "desktop" ? { kind: "here" } : { kind: "accounts", accounts: [{ hub: HOME, account: "me" }] },
       ...(state.focus ? { focus: state.focus } : {}),
+      ...(state.forked_from ? { forked_from: state.forked_from } : {}),
     },
     town,
     here: state.here ?? true,
@@ -319,6 +320,7 @@ export function specimenWorld(): { world: WorldState; now: Date; lastVisit: Date
     here: "desktop",
     // Filled from what `nodes` answers, as the shell's World is.
     nodes: [],
+    assisting: new Map(),
     known: [],
     machines: [
       {
@@ -382,6 +384,7 @@ export function specimenWorld(): { world: WorldState; now: Date; lastVisit: Date
               last_action: action("13:21:30", "desktop", "apply_patch", "D:/work/ingest/deploy/compose.yaml", "1 file"),
             }),
             resident("codex-6b19", "desktop", codex(), null, "gpt-6.1-sol", "10:58:00", {
+              forked_from: { machine: "desktop", resident: "codex-5a11" },
               now: { owed: {}, answering: [], activity: "idle", since: at("11:20:00"), turn: null, trouble: null, desk: false, waiting_for_user: false, title: "图标导出" },
             }),
           ],

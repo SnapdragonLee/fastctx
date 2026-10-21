@@ -19,7 +19,7 @@ use crate::Node;
 fn thread(node: &Node, resident: &ResidentId) -> Result<(Arc<CodexHost>, String), Failure> {
     let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new(format!("{resident} is not here")))?;
     crate::homes::available(node, &about)?;
-    let host = node.codex.of(&about)?;
+    let host = node.codex.of(node, &about)?;
     about.session.map(|thread| (host, thread)).ok_or_else(|| Failure::new(format!("{resident} has no Codex thread")))
 }
 
@@ -35,6 +35,17 @@ pub(super) fn reported(node: &Node, resident: &ResidentId, thread: &str, event: 
 pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, Failure> {
     let (codex, thread) = thread(node, resident)?;
     let mut offers = codex.offers(&thread).await.map_err(Failure::new)?;
+    let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new("unknown conversation"))?;
+    if crate::assists::assisting(node, &about.acting) {
+        if crate::assists::host::kept(node, resident)? != Some(true) {
+            offers.controls.clear();
+            offers.commands.clear();
+            return Ok(offers);
+        }
+        offers
+            .commands
+            .retain(|command| command.path.is_none() && fastctx_hosts::codex::assisted::command_allowed(&command.name));
+    }
     // A thread Codex has not reported on since it restarted has the model
     // it last reported in the resident's record.
     if offers.model.is_none() {
@@ -73,6 +84,16 @@ fn limits(kept: &AgentLimits) -> Vec<Limit> {
 
 pub async fn control(node: &Arc<Node>, resident: &ResidentId, mut control: Control) -> Result<Controlled, Failure> {
     let (codex, thread) = thread(node, resident)?;
+    let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new("unknown conversation"))?;
+    if crate::assists::assisting(node, &about.acting) {
+        crate::assists::host::require(node, resident)?;
+    }
+    if crate::assists::assisting(node, &about.acting)
+        && let Control::Command { name, path, .. } = &control
+        && (path.is_some() || !fastctx_hosts::codex::assisted::command_allowed(name))
+    {
+        return Err(Failure::not_run(fastctx_hosts::codex::assisted::COMMAND_REFUSED));
+    }
     if let Control::Answer { request, answer } = control {
         codex.answer(&thread, &request, &answer).map_err(Failure::new)?;
         return done("Answer sent. Codex uses the first response it receives; another client may have answered first.");
@@ -160,7 +181,10 @@ pub async fn control(node: &Arc<Node>, resident: &ResidentId, mut control: Contr
             codex.rename(&thread, &name).await.map_err(Failure::new)?;
             Ok(Controlled::Done { said: None })
         }
-        Control::Fork { through } => fork(node, resident, &codex, &thread, through).await,
+        Control::Fork { through } => {
+            drop(speaking);
+            fork(node, resident, &codex, &thread, through).await
+        }
         Control::Rewind { from } => {
             codex.rewind(&thread, &from).await.map_err(Failure::new)?;
             drop(speaking);
@@ -221,6 +245,7 @@ pub async fn control(node: &Arc<Node>, resident: &ResidentId, mut control: Contr
             done(&format!("Skill input {} turn {}", if sent.joined { "joined" } else { "started" }, sent.turn))
         }
         Control::Answer { .. } => unreachable!("answers do not acquire the speech lock"),
+        Control::CancelControl { .. } => unreachable!("queued controls are cancelled by the node"),
         Control::Agents | Control::AgentMessages { .. } => {
             Err(Failure::new("this host does not offer native agent controls"))
         }
@@ -234,9 +259,14 @@ async fn fork(
     thread: &str,
     through: Option<String>,
 ) -> Result<Controlled, Failure> {
+    let gate = node.residents.management(parent)?;
+    let source_guard = crate::gate_waits::shared(node, parent, &gate).await?;
+    node.residents.active(parent)?;
     let (source, town) = node.residents.about(parent).ok_or_else(|| Failure::new("unknown source resident"))?;
+
     let id = node.residents.new_id(&source.host.agent)?;
     crate::session_options::keep(node, &id, &crate::session_options::read(node, parent)?)?;
+    crate::focus::open(node, &node.world.conversation(&id), &source.acting, &source.focus).await?;
     let (spec, heard) =
         crate::colleagues::thread_spec(node, &id, &Origin::User, town.as_ref(), &source.acting, source.home.as_deref())
             .await?;
@@ -245,6 +275,7 @@ async fn fork(
     let (fork, model) = codex.fork(thread, through.as_deref(), spec).await.map_err(Failure::new)?;
     let at = Timestamp::now();
     let about = About {
+        forked_from: Some(Address { machine: node.machine(), resident: parent.clone() }),
         mcp_off: source.mcp_off.clone(),
         id: id.clone(),
         host: source.host,
@@ -282,6 +313,7 @@ async fn fork(
     let inherited =
         codex.history(&fork, &Address { machine: node.machine(), resident: id.clone() }).await.map_err(Failure::new)?;
     crate::attachments::inherit(node, parent, &id, &inherited)?;
+    drop(source_guard);
     node.residents.set_instructed(&id, heard);
     let event = SessionEvent {
         at,
@@ -296,6 +328,7 @@ async fn fork(
     };
     crate::turns::apply(node, &id, event).await.map_err(|error| Failure::new(error.to_string()))?;
     crate::codex::claim(node, &fork, &id).await;
+    crate::focus::forked(node, &id).await?;
     Ok(Controlled::Forked { resident: Address { machine: node.machine(), resident: id } })
 }
 

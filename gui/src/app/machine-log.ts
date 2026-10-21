@@ -70,7 +70,7 @@ export class MachineLog {
 
   private open(): void {
     this.panel.classList.toggle("as-sheet", matchMedia("(max-width: 760px)").matches);
-    layerOpened({ isOpen: () => !this.panel.hidden && this.panel.isConnected, close: () => this.close() });
+    layerOpened({ isOpen: () => !this.panel.hidden && this.panel.isConnected, close: () => this.close(), holds: (target) => this.panel.contains(target) });
     this.panel.hidden = false;
     this.button.setAttribute("aria-expanded", "true");
     this.records = [];
@@ -90,7 +90,7 @@ export class MachineLog {
     this.state = "loading";
     this.draw();
     try {
-      const page = await this.read(login.hub, login.account, this.records.length ? this.next : null);
+      const page = await this.read(login.hubName, login.account, this.records.length ? this.next : null);
       this.records.push(...page.records);
       this.next = page.next_before;
       this.state = "idle";

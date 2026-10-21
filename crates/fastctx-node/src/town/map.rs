@@ -33,7 +33,7 @@ pub async fn view(node: &Arc<Node>, town: &TownName) -> Result<MapView, Failure>
     };
     let opened = Stamp { by: first.by.clone(), on: first.on.clone(), at: first.at };
     let canon = match &record.canon {
-        Some(location) => Some(canon(node, location).await),
+        Some(location) => Some(canon(node, town, location).await),
         None => None,
     };
     Ok(MapView {
@@ -47,10 +47,14 @@ pub async fn view(node: &Arc<Node>, town: &TownName) -> Result<MapView, Failure>
     })
 }
 
-/// What a resident living in `town` is told of it: its record, while
-/// project memory is not wired in.
-pub async fn brief(node: &Arc<Node>, town: &TownName) -> Result<String, Failure> {
-    Ok(fastctx_hands::town::brief(&view(node, town).await?))
+/// What a resident living in `town` and working for `acting` is told of
+/// it: its record, naming only the machines it may work on, while project
+/// memory is not wired in.
+pub async fn brief(node: &Arc<Node>, town: &TownName, acting: &Acting) -> Result<String, Failure> {
+    let mut map = view(node, town).await?;
+    crate::ledger::query::seen(node, acting, town, &mut map.record)
+        .map_err(|error| Failure::new(format!("reading the project {town}: {error}")))?;
+    Ok(fastctx_hands::town::brief(&map))
 }
 
 /// This machine's copy of a town's ledger trails the hub's by what is still
@@ -118,8 +122,9 @@ pub fn no_ledger(node: &Node, town: &TownName) -> Failure {
 }
 
 /// The documents of a canon, read where it is.
-async fn canon(node: &Arc<Node>, location: &Location) -> Result<Vec<CanonHead>, String> {
-    if node.is_me(&location.machine) {
+async fn canon(node: &Arc<Node>, town: &TownName, location: &Location) -> Result<Vec<CanonHead>, String> {
+    let machine = super::machines::destination(node, town, &location.machine).map_err(|error| error.to_string())?;
+    if node.is_here(&machine) {
         let path = location.path.clone();
         return tokio::task::spawn_blocking(move || heads(Path::new(&path)))
             .await
@@ -127,7 +132,7 @@ async fn canon(node: &Arc<Node>, location: &Location) -> Result<Vec<CanonHead>, 
             .map_err(|error| error.to_string());
     }
     let call = RemoteCall::Canon { path: location.path.clone() };
-    match node.call(&Acting::Here, &(&location.machine).into(), Purpose::Hands, call).await {
+    match node.call(&Acting::Here, &machine, Purpose::Hands, call).await {
         Ok(Ok(RemoteReply::Canon { heads })) => Ok(heads),
         Ok(Ok(_)) => Err(format!("{} answered something else", location.machine)),
         Ok(Err(failure)) => Err(failure.message),

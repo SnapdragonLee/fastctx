@@ -21,7 +21,16 @@ pub(super) struct Legacy {
 struct Counted {
     process: String,
     since: f64,
+    #[serde(default)]
     steps: Vec<Step>,
+    #[serde(default)]
+    meter: bool,
+    #[serde(default)]
+    priced: Option<super::meter::Priced>,
+    #[serde(default)]
+    detail_key: Option<String>,
+    #[serde(default)]
+    account_at: Option<Timestamp>,
 }
 
 #[derive(Deserialize)]
@@ -32,6 +41,8 @@ enum Step {
         model: String,
         turn: String,
         agent: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
         timing: CallTiming,
         outcome: CallOutcome,
         phase: CallPhase,
@@ -77,7 +88,44 @@ pub(super) fn measured(
     super::with_book(node, path, |book| {
         let mut changed = false;
         if let Some(windows) = windows {
-            changed |= super::readings::record(book, path, windows, at)?;
+            let account = book.account_at(counted.as_ref().and_then(|c| c.account_at).unwrap_or(about.born_at));
+            changed |= super::readings::record(book, path, windows, at, account)?;
+        }
+        if counted.as_ref().is_some_and(|c| c.meter) {
+            let c = counted.expect("meter report");
+            let since = Usd::from_dollars(c.since).ok_or_else(|| io::Error::other("invalid process baseline"))?;
+            changed |= super::meter::record(
+                book,
+                path,
+                id,
+                about,
+                at,
+                c.process.clone(),
+                since,
+                total.unwrap_or(since),
+                c.priced,
+            )?;
+            if let Some(key) = c.detail_key {
+                for usage in divide(Usd::ZERO, &c.steps, id, about, at) {
+                    book.commit(
+                        path,
+                        Entry::Tokens {
+                            at,
+                            who: super::who(about),
+                            model: usage.model,
+                            tokens: usage.tokens,
+                            call: usage.call,
+                            key: Some(format!(
+                                "claude-step:{}:{}:{key}",
+                                about.session.as_deref().unwrap_or_default(),
+                                c.process
+                            )),
+                        },
+                    )?;
+                    changed = true;
+                }
+            }
+            return Ok(changed);
         }
         let (Some(session), Some(total)) = (&about.session, total) else {
             return Ok(changed);
@@ -149,7 +197,6 @@ pub(super) fn kinds(model: &str, tokens: &Tokens, usd: Usd) -> KindsUsd {
 }
 
 fn divide(total: Usd, steps: &[Step], id: &ResidentId, about: &About, at: Timestamp) -> Vec<Use> {
-    let fallback = about.model.as_deref().unwrap_or_default();
     let tokens: Vec<Tokens> = steps
         .iter()
         .map(|s| {
@@ -175,7 +222,7 @@ fn divide(total: Usd, steps: &[Step], id: &ResidentId, about: &About, at: Timest
     for ((step, tokens), usd) in steps.iter().zip(tokens).zip(amounts) {
         let (model, call) = match step {
             Step::Legacy(usage) => (usage.model.clone(), None),
-            Step::Current { usage, model, turn, agent, timing, outcome, phase } => (
+            Step::Current { usage, model, turn, agent, effort, timing, outcome, phase } => (
                 usage.as_ref().map_or_else(|| model.clone(), |u| u.model.clone()),
                 Some(Detail {
                     conversation: id.clone(),
@@ -183,6 +230,7 @@ fn divide(total: Usd, steps: &[Step], id: &ResidentId, about: &About, at: Timest
                     turn: Some(turn.clone()),
                     source: if agent.is_some() { CallSource::Agent } else { CallSource::Main },
                     agent: agent.clone(),
+                    effort: effort.clone(),
                     timing: timing.clone(),
                     outcome: *outcome,
                     phase: *phase,
@@ -200,7 +248,7 @@ fn divide(total: Usd, steps: &[Step], id: &ResidentId, about: &About, at: Timest
     }
     if !observed && (total != Usd::ZERO || steps.is_empty()) {
         uses.push(Use {
-            model: fallback.to_string(),
+            model: String::new(),
             usd: Some(total),
             tokens: Tokens::default(),
             kinds: Some(KindsUsd { input: total, ..Default::default() }),
@@ -210,6 +258,7 @@ fn divide(total: Usd, steps: &[Step], id: &ResidentId, about: &About, at: Timest
                 turn: None,
                 source: CallSource::Background,
                 agent: None,
+                effort: None,
                 timing: CallTiming { started_at: None, first_at: None, ended_at: at, approximate: false },
                 outcome: CallOutcome::Unknown,
                 phase: CallPhase::Unknown,

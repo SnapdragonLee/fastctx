@@ -12,6 +12,7 @@ mod apply;
 mod ask;
 mod attach;
 mod claude_session_directory;
+mod claude_subagents;
 mod copy;
 mod data;
 mod first_program;
@@ -88,6 +89,12 @@ enum Command {
     /// Identifies the process invoking the World mod helper.
     #[command(hide = true)]
     ParentProcess,
+    #[command(hide = true)]
+    ClaudeSubagents {
+        #[arg(value_parser = paths::parser())]
+        world: PathBuf,
+        session: String,
+    },
     #[command(hide = true)]
     ClaudeSessionDirectory {
         #[arg(value_parser = paths::parser())]
@@ -400,6 +407,7 @@ fn main() -> ExitCode {
             | Command::Supervise { .. }
             | Command::ParentProcess
             | Command::ClaudeSessionDirectory { .. }
+            | Command::ClaudeSubagents { .. }
             | Command::ClaudeRequest { .. }
             | Command::ClaudeElicitation { .. }
             | Command::ClaudeControlOwner { .. }
@@ -435,6 +443,7 @@ fn main() -> ExitCode {
         Command::Ui => ui(),
         Command::HostChange(args) => host_change::run(args),
         Command::ParentProcess => parent_process(),
+        Command::ClaudeSubagents { world, session } => claude_subagents::run(&world, session),
         Command::ClaudeSessionDirectory { world, session, previous, cwd, conversation } => {
             claude_session_directory::run(&world, session, previous, cwd, conversation)
         }
@@ -653,12 +662,7 @@ fn node(
     // can serve. A prepared successor is already watched by that worker.
     if successor.is_none() {
         match fastctx_install::renewal::read(&root) {
-            Ok(Some(plan))
-                if !matches!(
-                    plan.phase,
-                    fastctx_types::renewal::Phase::Complete | fastctx_types::renewal::Phase::Failed
-                ) =>
-            {
+            Ok(Some(plan)) if plan.phase != fastctx_types::renewal::Phase::Complete => {
                 if let Err(error) = fastctx_install::renewal::request(&root, false) {
                     eprintln!("fastctx: could not resume executable renewal: {error:#}");
                 }

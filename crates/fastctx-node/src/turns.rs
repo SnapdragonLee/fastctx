@@ -55,11 +55,12 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
     if about.host.agent.as_str() == "claude" {
         crate::claude::turn_facts::observe(&directory, &event.happened)?;
     }
-    // A ledger that cannot take this report never holds up the conversation:
-    // totals are cumulative, so the next report carries what this one did,
-    // and only this report's request detail is lost.
+    // Claude's durable event remains pending until its accounting row is committed.
     if let Err(error) = crate::usage::measurement(node, id, &about, &event).await {
         node.log.line(format_args!("recording {id}'s usage: {error}"));
+        if about.host.agent.as_str() == "claude" {
+            return Err(error);
+        }
     }
     // 2026-10-20: hidden title threads feed only the ledger; publishing their
     // internal-only usage would replace the main conversation's usage display.
@@ -352,9 +353,13 @@ async fn finish_at(
         }
         node.watchers.publish(id, &event);
     }
-    crate::composer::turn_ended(node, id, turn, &finished.end.how, finished.settles_queue, finished.queue_order)
-        .await
-        .map_err(std::io::Error::other)?;
+    // The composer learns of the end first: what it holds back and what it
+    // lets go decides whether a waiting control goes before its words.
+    let settled =
+        crate::composer::turn_ended(node, id, turn, &finished.end.how, finished.settles_queue, finished.queue_order)
+            .await;
+    crate::control_queue::schedule(node, id);
+    settled.map_err(std::io::Error::other)?;
     for handover in &accepted {
         for input in &handover.inputs {
             crate::inbox::settle(node, &directory, &input.delivery.id)?;

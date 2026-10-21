@@ -32,6 +32,7 @@ mod colleagues;
 mod composer;
 mod consent;
 mod control;
+mod control_queue;
 mod copy;
 mod data;
 mod delivery;
@@ -45,6 +46,7 @@ mod file_search;
 mod firewall;
 mod focus;
 mod forget;
+mod forks;
 mod gate_waits;
 mod gates;
 mod gather;
@@ -177,6 +179,7 @@ pub(crate) struct Node {
     desk: desk::Desk,
     watchers: watch::Watchers,
     composers: composer::Composers,
+    actions: control_queue::Actions,
     file_searches: file_search::Searches,
     line_sources: lines::Sources,
     log: Arc<log::Log>,
@@ -448,6 +451,23 @@ pub async fn run_prepared(
             let lock = world.node_lock();
             tokio::task::spawn_blocking(move || FileLock::acquire(&lock)).await??
         }
+        // A Linux service manager starts its node again the moment one
+        // ends, as when a node hands the World to the newer program it
+        // renewed to: the one it starts waits a while for the World rather
+        // than ending at once, refused, to be started again.
+        false if cfg!(target_os = "linux") && std::env::var_os("INVOCATION_ID").is_some() => {
+            let lock = world.node_lock();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                if let Some(lock) = FileLock::try_acquire(&lock)? {
+                    break lock;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(AlreadyServed(world.path().to_path_buf()).into());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+        }
         false => FileLock::try_acquire(&world.node_lock())?.ok_or_else(|| AlreadyServed(world.path().to_path_buf()))?,
     };
     if renewal.successor
@@ -538,6 +558,7 @@ pub async fn run_prepared(
         desk: desk::Desk::default(),
         watchers: watch::Watchers::default(),
         composers: composer::Composers::default(),
+        actions: Default::default(),
         file_searches: file_search::Searches::default(),
         line_sources: lines::Sources::default(),
         log,
@@ -619,6 +640,7 @@ pub async fn run_prepared(
     turns::recover(&node, unfinished.into_iter().collect()).await;
     composer::recover(&node).await;
     speech::recover(&node).await;
+    control_queue::recover(&node);
     node.effects_ready.store(true, std::sync::atomic::Ordering::Release);
     node.effects_changed.notify_waiters();
     composer::resume(&node);
@@ -670,25 +692,14 @@ pub async fn run_prepared(
             integrating.log.line(format_args!("settling the World's tools in the logins: {error}"));
         }
         logins::refresh::all(&integrating).await;
+        logins::watch::start(&integrating);
     });
 
     if let Some(supervision) = supervision {
         handoff::follow(node.clone(), supervision);
     }
 
-    match fastctx_install::renewal::read(&node.root) {
-        Ok(Some(plan))
-            if plan.phase != fastctx_types::renewal::Phase::Failed
-                && (plan.phase != fastctx_types::renewal::Phase::Complete
-                    || plan.candidate.build != node.renewal.build) =>
-        {
-            if let Err(error) = fastctx_install::renewal::request(&node.root, false) {
-                node.log.line(format_args!("could not resume executable renewal: {error:#}"));
-            }
-        }
-        Err(error) => node.log.line(format_args!("could not read executable renewal: {error}")),
-        _ => {}
-    }
+    renewal::resume(&node);
 
     stuck::start(&node);
     let watchdog = watchdog::Watchdog::start(node.log.clone()).context("starting the control-loop watchdog")?;

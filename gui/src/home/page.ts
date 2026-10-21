@@ -40,6 +40,9 @@ export interface HomeOptions {
   answer(address: Address, asked: Asked, choice: number): Promise<unknown>;
   /** Stops a running command, on the machine it runs on, whoever started it. */
   stopJob?(job: string, machine: string): Promise<void>;
+  /** Opens this device's updates, where the World's program here is put
+   *  up to the interface's. */
+  updates?(): void;
 }
 
 type Glyph = Parameters<typeof glyph>[0];
@@ -105,6 +108,10 @@ export class HomePage {
         options.newTalk();
         return;
       }
+      if (target.closest("[data-front-updates]")) {
+        options.updates?.();
+        return;
+      }
       const button = target.closest<HTMLButtonElement>(".front-answer");
       if (button) this.answer(button);
       const stop = target.closest<HTMLElement>("[data-job]");
@@ -158,7 +165,7 @@ export class HomePage {
     const { words } = this.options;
     this.now = now;
     const html = old
-      ? `<div class="front-column"><p class="front-trouble">${escape(words.oldWorld(old.node_version, old.client_version))}</p><a class="front-begin-link" href="#/settings">${escape(words.renewThere)}</a></div>`
+      ? `<div class="front-column"><p class="front-trouble">${escape(words.oldWorld(old.node_version, old.client_version))}</p><button class="front-begin-link" type="button" data-front-updates>${escape(words.renewThere)}</button></div>`
       : `<div class="front-column"><p class="front-trouble" title="${escape(why)}">${escape(words.unreachable(why))}</p><a class="front-begin-link" href="#/login">${escape(words.setUp)}</a></div>`;
     this.draw(html, false);
   }
@@ -182,7 +189,7 @@ export class HomePage {
 
   /** What it is called: its conversation's name, or who it is. */
   private name(r: ResidentNow): string {
-    return titleOf(r) ?? this.options.words.someone(agentName(r.about.host.agent), r.about.machine);
+    return titleOf(r) ?? this.someone(r);
   }
 
   private nameOf(address: Address): string {
@@ -196,7 +203,7 @@ export class HomePage {
   private about(r: ResidentNow | undefined, name: string): string {
     if (!r) return name;
     const { words } = this.options;
-    const who = words.someone(agentName(r.about.host.agent), r.about.machine);
+    const who = this.someone(r);
     const project = r.town ? (this.world?.towns.find((town) => town.town === r.town)?.record.name ?? r.town) : "";
     const called = r.about.origin.kind === "colleague" ? words.colleagueOf(this.nameOf(r.about.origin.asked_by)) : "";
     return [name, who === name ? "" : who, project, called].filter(Boolean).join("\n");
@@ -209,8 +216,20 @@ export class HomePage {
     return `<span class="front-agent" title="${escape(title)}">${glyph(agent === "claude" || agent === "codex" ? agent : "agents", 16)}</span>`;
   }
 
-  /** The machine's mark, as the sidebar draws it, named on hover. */
+  /** Who it is: the agent on its machine, or for one assisting the user,
+   *  whose agent, never the machine. */
+  private someone(r: ResidentNow): string {
+    const { words } = this.options;
+    const agent = agentName(r.about.host.agent);
+    const owner = this.world?.assisting.get(r.about.machine);
+    return owner !== undefined ? words.someoneAssisting(agent, owner) : words.someone(agent, r.about.machine);
+  }
+
+  /** The machine's mark, as the sidebar draws it, named on hover; where
+   *  agents assisting the user run, a person's, named as whose agents. */
   private device(machine: string): string {
+    const owner = this.world?.assisting.get(machine);
+    if (owner !== undefined) return `<span class="front-device" title="${escape(this.options.words.assistAgents(owner))}">${glyph("colleague", 16)}</span>`;
     const node = this.world?.nodes.find((one) => one.name === machine);
     const form = node && "Ok" in node.facts ? (node.facts.Ok.form ?? "desktop") : "desktop";
     return `<span class="front-device" title="${escape(machine)}">${glyph(form, 16)}</span>`;

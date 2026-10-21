@@ -5,6 +5,8 @@ import type { HubName } from "./accounts";
 import type { MachineName, Timestamp } from "./wire";
 
 export interface MachineStats {
+  /** Which run of its node told it; an older node says nothing. */
+  run?: string;
   machine: MachineName;
   /** When this was read. */
   at: Timestamp;
@@ -86,6 +88,8 @@ export interface Gpu {
 /** The machine's line to one hub. */
 export interface Line {
   hub: HubName;
+  /** How many round trips and changes its node kept in this run. */
+  kept?: LineKept;
   /** Since when it is up, or, while it is down, since when it tries. */
   since: Timestamp;
   up: boolean;
@@ -117,6 +121,9 @@ export interface NodeSeen {
   service: boolean;
   /** What of its work has gone on too long, as it last looked at itself. */
   stuck?: StuckWork[];
+  /** What of its records needs attention, as its own words say it: a
+   *  usage ledger with rows it set aside, or one it cannot read now. */
+  health?: { kind: string; text: string }[];
   /** The last place macOS kept private from it while it runs, and when. */
   refused?: { path: string; at: Timestamp };
 }
@@ -126,4 +133,16 @@ export interface StuckWork {
   doing: string;
   what: string;
   seconds: number;
+}
+
+export interface LineKept {
+  trips: number;
+  changes: number;
+}
+
+/** What the last reading told of a machine's lines, so the next brings only
+ *  what came after it, whatever the machine's clock did meanwhile. */
+export interface StatsSeen {
+  run: string;
+  lines: [HubName, LineKept][];
 }

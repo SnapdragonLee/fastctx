@@ -96,6 +96,24 @@ async function trackCheckpoint($, state, result) {
   return true
 }
 
+// The checkpoints without their first `offset` messages: a turn that began
+// before them keeps where it ended, one that ended before them goes.
+function checkpointsFrom(checkpoints, offset) {
+  const turns = {}
+  for (const [turn, point] of Object.entries(checkpoints.turns)) {
+    if (point.after !== undefined && point.after - offset <= 0) continue
+    const kept = { ...point }
+    if (point.after !== undefined) kept.after = point.after - offset
+    if (point.before !== undefined && point.before - offset > 0) kept.before = point.before - offset
+    else {
+      delete kept.before
+      kept.before_uuid = null
+    }
+    turns[turn] = kept
+  }
+  return { ...checkpoints, messages: checkpoints.messages.slice(offset), uuids: checkpoints.uuids.slice(offset), turns }
+}
+
 function checkpointCut(current, checkpoint) {
   if (!checkpoint.length) throw new Error('Claude Code cannot retain an empty conversation through session.compact')
   if (!checkpoint.every((hash, index) => current[index] === hash)) throw new Error('the selected turn was compacted away or has no retained message boundary')
@@ -135,6 +153,14 @@ async function controlRewind($, state, control) {
   } finally { state.rewind = null; state.compacting = false }
 }
 
+async function compactedCheckpoint($, state, messages, parent) {
+  state.checkpoints = { messages: await messageFingerprints(messages), turns: {}, full: true,
+    uuids: messages.map(() => null), compacted_parent: parent }
+  state.lastUuid = undefined
+  state.lastRawUuid = undefined
+  await saveCheckpoints($, state)
+}
+
 async function controlCompaction($, e, next) {
   if (e.agentId !== undefined) return next(e)
   const state = await controlBegin($, sessions)
@@ -143,10 +169,7 @@ async function controlCompaction($, e, next) {
     const parent = state.lastRawUuid
     const result = await next(e)
     if (e.trigger !== 'precompute' && result.skip === undefined) {
-      state.checkpoints = { messages: await messageFingerprints(result.messages), turns: {}, full: true, uuids: result.messages.map(() => null), compacted_parent: parent }
-      state.lastUuid = undefined
-      state.lastRawUuid = undefined
-      await saveCheckpoints($, state)
+      await compactedCheckpoint($, state, result.messages, parent)
     }
     return result
   }

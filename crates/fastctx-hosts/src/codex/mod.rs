@@ -13,6 +13,7 @@
 //! `environments: []` disables the thread's own shell and file editing.
 
 mod account;
+pub mod assisted;
 pub use account::{LimitsHow, LimitsReport, buckets, limits_of, merge};
 mod accounting;
 mod requests;
@@ -23,6 +24,7 @@ mod cache;
 mod commands;
 #[cfg(test)]
 mod contract;
+mod control_start;
 mod controls;
 mod history;
 pub mod identify;
@@ -281,6 +283,7 @@ pub use fastctx_types::residents::ASYNC_REPLY_TAG;
 
 pub struct CodexHost {
     codex_home: PathBuf,
+    assisted: Option<assisted::Assisted>,
     /// The home whose desktop app's program this host runs, when its own
     /// records none (`launch::discover_for`).
     program_home: Option<PathBuf>,
@@ -303,6 +306,7 @@ pub struct CodexHost {
     tools_changed: Notify,
     /// Where what the app-server reads or pushes of the login's limits goes.
     limits: Mutex<Option<mpsc::UnboundedSender<account::LimitsReport>>>,
+    limits_owner: Arc<Mutex<account::Owner>>,
     /// Where what each app-server says of the login on starting goes.
     said: Mutex<Option<mpsc::UnboundedSender<identify::SaidReport>>>,
 }
@@ -370,6 +374,8 @@ struct Thread {
     /// The turn running now: reported started, or named in the answer to
     /// the words that started it.
     turn: Option<String>,
+    #[serde(skip)]
+    start_revision: u64,
     submitted: bool,
     observed_submission: Option<String>,
     /// A stop asked for while words were on their way into a turn whose id
@@ -418,6 +424,7 @@ impl CodexHost {
         let login = codex_home.display().to_string();
         let host = Arc::new(Self {
             codex_home,
+            assisted: None,
             program_home,
             workdir,
             env,
@@ -449,6 +456,7 @@ impl CodexHost {
             ),
             tools_changed: Notify::new(),
             limits: Mutex::new(None),
+            limits_owner: Arc::new(Mutex::new(account::Owner::default())),
             said: Mutex::new(None),
         });
         (host, receiver)
@@ -472,7 +480,7 @@ impl CodexHost {
     /// its ID and model, so an idle app-server replacement can resume it.
     pub async fn start_thread(self: &Arc<Self>, spec: ThreadSpec) -> Result<(String, Option<String>), String> {
         let server = self.server().await?;
-        let effective = user_config::effective(&server, &spec).await?;
+        let effective = user_config::effective(&server, &spec, self.assisted.is_some()).await?;
         let answer = server
             .request(
                 "thread/start",
@@ -537,7 +545,7 @@ impl CodexHost {
         let socket = std::path::absolute(&self.workdir)
             .map_err(|error| format!("finding {}: {error}", self.workdir.display()))?
             .join("app-server.sock");
-        Ok((program, format!("unix://{}", socket.display()), self.codex_home.clone()))
+        Ok((program, format!("unix://{}", socket.display()), self.session_home().to_path_buf()))
     }
 
     /// Makes a thread ready for words: loaded in the app-server, and its
@@ -885,7 +893,7 @@ impl CodexHost {
             entry.spec.clone().ok_or_else(|| format!("how the Codex thread {thread} was started is not known"))?
         };
         let selection = controls::Selection::read(&spec.choices)?;
-        let effective = user_config::effective(server, &spec).await?;
+        let effective = user_config::effective(server, &spec, self.assisted.is_some()).await?;
         let answer = server
             .request(
                 "thread/resume",
@@ -926,7 +934,19 @@ impl CodexHost {
     /// A replacement waits for running turns and callers using the current
     /// process. Its identity includes the app's binary and Computer Use
     /// connection, not incidental writes to the user's configuration.
-    async fn server(self: &Arc<Self>) -> Result<ServerUse, String> {
+    fn server(
+        self: &Arc<Self>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ServerUse, String>> + Send + '_>> {
+        Box::pin(self.server_inner())
+    }
+
+    async fn server_inner(self: &Arc<Self>) -> Result<ServerUse, String> {
+        // Obtain the login authority before taking this host's startup lock;
+        // the two hosts never wait for each other's startup locks.
+        let authority = match &self.assisted {
+            Some(assisted) => Some(assisted.owner.server().await?),
+            None => None,
+        };
         let _starting = self.starting.lock().await;
         {
             let mut state = self.lock();
@@ -939,7 +959,10 @@ impl CodexHost {
             }
         }
         let path = self.env.iter().find(|(name, _)| name.eq_ignore_ascii_case("PATH")).map(|(_, value)| value);
-        let launch = launch::resolve_for(&self.codex_home, self.program_home.as_deref(), path)?;
+        let mut launch = launch::resolve_for(&self.codex_home, self.program_home.as_deref(), path)?;
+        if let (Some(assisted), Some(authority)) = (&self.assisted, &authority) {
+            assisted.configure(authority, &mut launch).await?;
+        }
         let replaced = {
             let _generation = self.generation.lock().expect("never poisoned");
             let mut state = self.lock();
@@ -1010,6 +1033,12 @@ impl CodexHost {
                 return Err(format!("starting the Codex app-server {}: {error}", launch.binary.display()));
             }
         };
+        if let (Some(assisted), Some(authority)) = (&self.assisted, &authority)
+            && let Err(error) = assisted.login(authority, &server).await
+        {
+            server.kill();
+            return Err(error);
+        }
         (self.log)(format!(
             "Codex app-server {} started as pid {} from {}",
             answer.get("userAgent").and_then(Value::as_str).unwrap_or("(no user agent)"),
@@ -1154,7 +1183,7 @@ impl CodexHost {
                 let entry = state.threads.entry(thread.clone()).or_default();
                 entry.request_timing.observe(method, params, at).map(|request| json!({ "counted": {
                 "thread": thread, "turn": params.pointer("/turn/id").and_then(Value::as_str).or(turn.as_deref()),
-                "model": entry.model, "tokens": null, "request": request,
+                "model": entry.model, "effort": entry.effort, "tokens": null, "request": request,
             }}))
             };
         if let Some(usage) = failed {
@@ -1201,6 +1230,7 @@ impl CodexHost {
                         entry.turn = Some(turn.clone());
                         entry.last_message = None;
                     }
+                    entry.start_revision = entry.start_revision.wrapping_add(1);
                     entry.started.insert(turn.clone());
                     entry.submissions.started(&turn, entry.loaded && entry.subscribed);
                     entry.accounting.started(&turn);
@@ -1363,7 +1393,7 @@ impl CodexHost {
                     entry
                         .accounting
                         .usage(params.get("turnId").and_then(Value::as_str), &params["tokenUsage"])
-                        .map(|tokens| json!({ "thread": thread, "turn": turn, "model": entry.model, "tokens": tokens,
+                        .map(|tokens| json!({ "thread": thread, "turn": turn, "model": entry.model, "effort": entry.effort, "tokens": tokens,
                             "request": entry.request_timing.finish(at, fastctx_types::usage_calls::CallOutcome::Completed) }))
                 };
                 let mut usage = params["tokenUsage"].clone();
@@ -1573,6 +1603,30 @@ async fn pump(server: Arc<AppServer>, mut inbound: mpsc::UnboundedReceiver<Inbou
                 }
             }
             Inbound::Request { id, method, params } => {
+                if method == "account/chatgptAuthTokens/refresh" && host.assisted.is_some() {
+                    let server = server.clone();
+                    tokio::spawn(async move {
+                        let assisted = host.assisted.as_ref().expect("assisted host");
+                        let refreshed = tokio::time::timeout(
+                            std::time::Duration::from_secs(9),
+                            assisted.refresh(params["previousAccountId"].as_str()),
+                        )
+                        .await;
+                        match refreshed {
+                            Ok(Ok(tokens)) => {
+                                let _ = server.answer(&id, &tokens);
+                            }
+                            _ => {
+                                let _ = server.refuse(
+                                    id,
+                                    -32000,
+                                    "The original Codex login could not refresh the assisted host's credentials.",
+                                );
+                            }
+                        }
+                    });
+                    continue;
+                }
                 if matches!(
                     method.as_str(),
                     "item/commandExecution/requestApproval"
@@ -1693,15 +1747,9 @@ pub fn desktop_hands(codex_home: &Path) -> Result<(Vec<String>, Vec<String>), St
     Ok((servers, plugins))
 }
 
-/// What a thread of a login assisting another account goes without, added
-/// to `config` (`world-network.md`, 共享机器与智能体协助): the hands that
-/// work the screen and the browser of the machine it runs on,
-/// `desktop_hands`, which the account assisted may not touch. Everything
-/// else of the login comes along as its owner set it up: its other MCP
-/// servers, plugins, skills, hooks, memories and AGENTS.md, and the
-/// account's apps; an assisting agent is a whole one. Codex's own shell and image viewer are off for every thread
-/// the World starts, `run` doing their work.
-pub fn assisting(config: &mut Value, servers: &[String], plugins: &[String]) {
+/// Removes the desktop tools when the user disables screen access for a
+/// colleague. Full assisted-login isolation is implemented in `assisted`.
+pub fn without_desktop(config: &mut Value, servers: &[String], plugins: &[String]) {
     for name in servers {
         config["mcp_servers"][name] = json!({ "enabled": false });
     }

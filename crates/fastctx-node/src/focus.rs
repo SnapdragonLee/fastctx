@@ -13,6 +13,7 @@
 //! Nothing here stops a conversation from starting or a change from being
 //! made: a machine or folder that cannot be read is told as such.
 
+use fastctx_types::access::Written;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,15 +51,15 @@ pub(crate) struct Opening {
 pub(crate) async fn folders(
     node: &Arc<Node>,
     acting: &Acting,
-    machine: Option<MachineName>,
+    machine: Option<Written>,
     path: Option<String>,
 ) -> Result<Folders, Failure> {
     let here = node.machine();
-    let Some(target) = machine.filter(|machine| !node.is_me(machine)) else {
+    let Some(target) = machine.filter(|machine| !node.is_here(machine)) else {
         return folders_here(here, path).await;
     };
     match node
-        .call(acting, &(&target).into(), Purpose::Hands, RemoteCall::Folders { path })
+        .call(acting, &target, Purpose::Hands, RemoteCall::Folders { path })
         .await
         .map_err(|failure| Failure::new(failure.to_string()))??
     {
@@ -104,7 +105,6 @@ pub(crate) async fn note(node: &Arc<Node>, acting: &Acting, focus: &Focus) -> Op
     if focus.is_empty() {
         return None;
     }
-    let home = node.machine();
     // Every machine is read at once: one slow to answer delays only itself.
     let mut reading = tokio::task::JoinSet::new();
     for (index, machine) in focus.machines.iter().enumerate() {
@@ -123,9 +123,6 @@ pub(crate) async fn note(node: &Arc<Node>, acting: &Acting, focus: &Focus) -> Op
     for (machine, outlines) in focus.machines.iter().zip(read) {
         text.push_str("\n\n");
         text.push_str(&machine.machine.to_string());
-        if home == machine.machine.name && machine.machine.hub.is_none() {
-            text.push_str(" (this machine)");
-        }
         if machine.folders.is_empty() {
             text.push_str(": the machine as a whole");
             continue;
@@ -286,6 +283,29 @@ pub(crate) async fn changed(
         at: Timestamp::now(),
         notice: Notice::World { fact: WorldFact::Focus { focus: focus.clone() }, text },
     })
+}
+
+/// A fork keeps context already injected into its source's history. Its own
+/// instructions apply on the next full context rebuild, so its current
+/// selection is also delivered once with the next turn, without waking it.
+pub(crate) async fn forked(node: &Arc<Node>, id: &ResidentId) -> Result<(), Failure> {
+    let opening = opening(&node.world.conversation(id))?
+        .ok_or_else(|| Failure::new("the fork has no saved machine and folder context"))?;
+    let text = if opening.note.is_empty() {
+        "No machines or folders are selected for this fork; this replaces any earlier selection in its inherited history and does not limit which machines it may use.".to_string()
+    } else {
+        format!(
+            "The machines and folders selected for this fork; this replaces any earlier selection in its inherited history.\n\n{}",
+            opening.note
+        )
+    };
+    let delivery = Delivery {
+        id: crate::speech::new_id("fork-focus"),
+        at: Timestamp::now(),
+        notice: Notice::World { fact: WorldFact::Focus { focus: opening.focus }, text },
+    };
+    crate::speech::tell_here(node, id, delivery, crate::speech::Owed::Nobody).await?;
+    Ok(())
 }
 
 /// A Codex thread compacted its conversation, `item` naming the compaction:

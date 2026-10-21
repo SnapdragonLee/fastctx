@@ -36,6 +36,28 @@ struct Request {
 }
 
 pub async fn control(node: &Arc<Node>, resident: &ResidentId, control: Control) -> Result<Controlled, Failure> {
+    let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new("unknown conversation"))?;
+    if crate::assists::assisting(node, &about.acting) {
+        crate::assists::host::require(node, resident)?;
+    }
+    if crate::assists::assisting(node, &about.acting)
+        && let Control::Command { name, path, .. } = &control
+        && (path.is_some() || !fastctx_hosts::claude::assisted::command_allowed(name))
+    {
+        return Err(Failure::not_run(fastctx_hosts::claude::assisted::COMMAND_REFUSED));
+    }
+    // A model chosen for a conversation whose session is not running is kept
+    // where its mod reads it when the session runs again: nothing is woken
+    // for a choice its next turn takes.
+    if let Control::Model { model, effort } = &control
+        && node.residents.about(resident).is_some_and(|(about, _)| about.session.is_some())
+        && !running(node, resident)?
+    {
+        return keep_selection(node, resident, model.clone(), effort.clone());
+    }
+    if !matches!(control, Control::Answer { .. }) {
+        super::resume::ready(node, resident).await?;
+    }
     match control {
         Control::Fork { through } => super::fork::fork(node, resident, through).await,
         Control::Answer { request, answer } => answer_request(node, resident, request, answer).await,
@@ -53,28 +75,15 @@ pub async fn control(node: &Arc<Node>, resident: &ResidentId, control: Control) 
             )
             .await
             .map_err(Failure::new)?;
-            let result = invoke(node, resident, json!({"do":"rewind", "from":from})).await?;
+            let result = invoke_action(node, resident, json!({"do":"rewind", "from":from})).await?;
             if result["kind"] == "rewound" {
                 super::rewind::finish(node, resident, &result, Some(&from)).await?
             }
             serde_json::from_value(result).map_err(|error| Failure::new(format!("Claude control reply: {error}")))
         }
-        // A choice for a session that is not running now is kept where its
-        // mod reads it when the session runs again: the session is not woken
-        // for it. One made while Claude Code starts the session waits the
-        // few seconds until it names it, where the choice is kept.
-        Control::Model { model, effort } if !running(node, resident)? => {
-            named(node, resident).await?;
-            if running(node, resident)? {
-                let control = Control::Model { model, effort };
-                let result = invoke(node, resident, serde_json::to_value(control).expect("control serializes")).await?;
-                return serde_json::from_value(result)
-                    .map_err(|error| Failure::new(format!("Claude control reply: {error}")));
-            }
-            keep_selection(node, resident, model, effort)
-        }
         control => {
-            let result = invoke(node, resident, serde_json::to_value(control).expect("control serializes")).await?;
+            let result =
+                invoke_action(node, resident, serde_json::to_value(control).expect("control serializes")).await?;
             serde_json::from_value(result).map_err(|error| Failure::new(format!("Claude control reply: {error}")))
         }
     }
@@ -83,28 +92,9 @@ pub async fn control(node: &Arc<Node>, resident: &ResidentId, control: Control) 
 /// How long a running session's mod is given to say what it offers.
 const OFFERS_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How long a choice made while Claude Code starts a session waits for it
-/// to name the session.
-const NAMING: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// Waits until Claude Code has named the resident's session.
-async fn named(node: &Node, resident: &ResidentId) -> Result<(), Failure> {
-    let deadline = tokio::time::Instant::now() + NAMING;
-    loop {
-        let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new("unknown resident"))?;
-        if about.session.is_some() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(Failure::new("Claude Code has not started this conversation yet; choose again in a moment"));
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-}
-
 /// Whether the session's mod runs now with the control contract this node
 /// speaks.
-fn running(node: &Node, resident: &ResidentId) -> Result<bool, Failure> {
+pub(super) fn running(node: &Node, resident: &ResidentId) -> Result<bool, Failure> {
     let (about, _) = node.residents.about(resident).ok_or_else(|| Failure::new("unknown resident"))?;
     let Some(session) = &about.session else { return Ok(false) };
     let directory = files::directory(node.world.path(), session);
@@ -195,6 +185,7 @@ pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, F
         Err(Failure::new("not running"))
     };
     let mut offers = if let Ok(mut offers) = asked {
+        super::catalog::keep(node, resident, &offers)?;
         // The mod lists the aliases this login's Claude Code offers; the
         // World offers its own table's rows of those families.
         let aliases: Vec<String> = offers.models.drain(..).map(|model| model.id).collect();
@@ -237,8 +228,10 @@ pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, F
             .transpose()
             .map_err(failure)?
             .flatten();
+        let catalog = super::catalog::get(node, resident, about.session.as_deref())?;
         Offers {
-            controls: vec![ControlKind::Model],
+            controls: catalog.controls,
+            commands: catalog.commands,
             checkpoints: checkpoints.as_ref().map(|value| {
                 value["turns"]
                     .as_object()
@@ -287,6 +280,16 @@ pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, F
     {
         offers.controls.push(ControlKind::Answer);
     }
+    if crate::assists::assisting(node, &about.acting) {
+        if crate::assists::host::kept(node, resident)? != Some(true) {
+            offers.controls.clear();
+            offers.commands.clear();
+            return Ok(offers);
+        }
+        offers.commands.retain(|command| {
+            command.path.is_none() && fastctx_hosts::claude::assisted::command_allowed(&command.name)
+        });
+    }
     Ok(offers)
 }
 
@@ -311,7 +314,7 @@ fn live_host(node: &Node, resident: &ResidentId) -> Result<(PathBuf, Host), Fail
         Failure::new("this Claude session has no active World control bridge; reopen it with the current plugin")
     })?;
     if !files::active(&directory, &host).map_err(failure)? {
-        return Err(Failure::new("this Claude session is not running; reopen it before controlling it"));
+        return Err(Failure::not_run("this Claude session retired before the control was submitted"));
     }
     if host.command_contract != Some(files::COMMAND_CONTRACT) {
         return Err(Failure::new(
@@ -350,6 +353,16 @@ pub(super) async fn selection(
     })
 }
 
+async fn invoke_action(node: &Arc<Node>, resident: &ResidentId, control: Value) -> Result<Value, Failure> {
+    match invoke(node, resident, control.clone()).await {
+        Err(error) if error.not_run => {
+            super::resume::ready(node, resident).await?;
+            invoke(node, resident, control).await
+        }
+        result => result,
+    }
+}
+
 pub(super) async fn invoke(node: &Arc<Node>, resident: &ResidentId, control: Value) -> Result<Value, Failure> {
     let (directory, host) = live_host(node, resident)?;
     let key = crate::speech::new_id("control").to_string();
@@ -384,7 +397,9 @@ pub(super) async fn invoke(node: &Arc<Node>, resident: &ResidentId, control: Val
     }
     // The activation's process stream also ends when its plugin unloads.
     // Its exit, a clear or reload, or the reply settles this one-shot.
-    let reply = receiver.await.map_err(|_| Failure::new("the Claude control bridge stopped"))?;
+    let reply = receiver.await.map_err(|_| {
+        Failure::new("the Claude control bridge stopped before confirming this control; its outcome is unknown")
+    })?;
     collect_invocation(&directory, &key).map_err(failure)?;
     reply.map_err(Failure::new)
 }

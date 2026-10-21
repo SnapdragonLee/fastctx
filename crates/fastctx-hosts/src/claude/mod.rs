@@ -12,9 +12,12 @@
 //! Uses Claude Code's public mod and plugin hook contracts, with command
 //! knowledge pinned to the statically inspected 2.1.294 program.
 
+mod accounting;
 pub mod agents;
+pub mod assisted;
 pub mod background;
 pub mod calls;
+pub mod catalog;
 mod content;
 mod context;
 pub mod control;
@@ -45,6 +48,9 @@ use serde_json::json;
 pub const MARKETPLACE: &str = "fastctx";
 /// The plugin's name.
 pub const PLUGIN: &str = "fastctx-world";
+
+/// The version the World's plugin is written as: this fastctx's.
+pub const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The permission rule allowing every tool of the plugin's `fastctx` server:
 /// Claude Code names a plugin's MCP tools `mcp__plugin_<plugin>_<server>__…`.
@@ -129,7 +135,7 @@ pub fn write_plugin(world: &Path) -> io::Result<PathBuf> {
     let command = format!("{root}/bin/fastctx{}", if cfg!(windows) { ".exe" } else { "" });
     let market = marketplace(world);
     let plugin = plugin_dir(world);
-    let version = env!("CARGO_PKG_VERSION");
+    let version = PLUGIN_VERSION;
     let description = "The World: its tools, and word of what happens in it, for every Claude Code session";
     // The plugin belongs to this World, and its server says so itself: a
     // background session's environment is the Claude Code daemon's, set by
@@ -183,6 +189,9 @@ pub fn write_plugin(world: &Path) -> io::Result<PathBuf> {
     let module = MOD
         .replace("__FASTCTX_CONTROLS__", include_str!("control.js"))
         .replace("__FASTCTX_COMMANDS__", include_str!("commands.js"))
+        .replace("__FASTCTX_COMMAND_CATALOG__", include_str!("command_catalog.json"))
+        .replace("__FASTCTX_ASSISTED__", include_str!("assisted.js"))
+        .replace("__FASTCTX_ACCOUNT_AGENTS__", include_str!("agent_config.js"))
         .replace("__FASTCTX_SELECTION__", include_str!("selection.js"))
         .replace("__FASTCTX_REWIND__", include_str!("rewind.js"))
         .replace("__FASTCTX_OBSERVATIONS__", include_str!("observations.js"))

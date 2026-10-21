@@ -139,6 +139,14 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
             settings[&key] = value;
         }
     }
+    let assisting = crate::assists::host::starting(node, id, &about.acting)?;
+    if assisting {
+        let env = crate::claude::environment()?;
+        let user_home = fastctx_platform::user_home().map_err(|error| Failure::new(error.to_string()))?;
+        let default = crate::homes::claude_default(&env, &user_home);
+        fastctx_hosts::claude::assisted::configure(&mut settings, about.home.as_deref().unwrap_or(&default), &env)
+            .map_err(Failure::new)?;
+    }
     fastctx_platform::publish(
         &directory.claude_settings(),
         &serde_json::to_vec_pretty(&settings).unwrap(),
@@ -146,7 +154,21 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
     )
     .map_err(|e| Failure::new(e.to_string()))?;
     if creating || mcp.is_file() {
-        let value = json!({"mcpServers":servers(node,id,&about.acting,&options.mcp_off,false)});
+        let servers = if assisting {
+            // Strict MCP mode excludes plugin servers too, including the
+            // World's. Supply that server explicitly under its usual name.
+            json!({"fastctx": {
+                "command": node.fastctx,
+                "args": ["serve"],
+                "env": {
+                    "FASTCTX_HOME": node.root,
+                    "FASTCTX_AGENT_HOME": about.home.as_deref().map(|home| home.to_string_lossy()).unwrap_or_default(),
+                },
+            }})
+        } else {
+            Value::Object(servers(node, id, &about.acting, &options.mcp_off, false))
+        };
+        let value = json!({"mcpServers": servers});
         fastctx_platform::publish(
             &mcp,
             &serde_json::to_vec_pretty(&value).unwrap(),
@@ -154,9 +176,12 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
         )
         .map_err(|e| Failure::new(e.to_string()))?;
     }
+    // A session Claude Code never paired has no directory to bring up to date.
     if let Some(session) = &about.session {
         let directory = fastctx_hosts::claude::exchange::sessions(node.world.path()).join(session);
-        hand_to_session(node, id, &directory).map_err(|e| Failure::new(e.to_string()))?;
+        if directory.is_dir() {
+            hand_to_session(node, id, &directory).map_err(|e| Failure::new(e.to_string()))?;
+        }
     }
     Ok(mcp)
 }

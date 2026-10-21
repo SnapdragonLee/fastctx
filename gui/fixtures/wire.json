@@ -18866,6 +18866,10 @@
         "do": "compact"
       },
       {
+        "do": "cancel_control",
+        "id": "control-1"
+      },
+      {
         "do": "model",
         "model": "example-model",
         "effort": "custom-effort"
@@ -18923,6 +18927,11 @@
         "said": "Host output without a success flag"
       },
       {
+        "kind": "reported",
+        "said": "Waiting for the current turn to end.",
+        "queued": "control-1"
+      },
+      {
         "kind": "refused",
         "said": "The host refused this change",
         "current_model": "model"
@@ -18946,6 +18955,17 @@
         "usage": null
       },
       {
+        "control_queue": true,
+        "pending_controls": [
+          {
+            "id": "control-1",
+            "control": {
+              "do": "compact"
+            },
+            "at": "2026-10-21T00:00:00Z",
+            "state": "waiting"
+          }
+        ],
         "controls": [
           "command",
           "compact",
@@ -20447,7 +20467,7 @@
         }
       }
     ],
-    "host_text": "=== from fastctx (user attachments, v2) ===\nThe user attached these files. Each original stays on owner.machine at path; sizes are in bytes. Use fastctx view directly for files on your shell's machine, and use on with the named machine for files elsewhere. Images come back as images.\n{\"delivery\":\"talk-ab12\",\"from\":\"phone\",\"attachments\":[{\"id\":\"attachment-ab12\",\"owner\":{\"machine\":\"laptop\",\"resident\":\"codex-ab12\"},\"conversation\":{\"machine\":\"desktop\",\"resident\":\"codex-ab12\"},\"town\":\"world\",\"path\":\"C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png\",\"name\":\"截图.png\",\"media_type\":\"image/png\",\"size\":3145728,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n=== user's words (verbatim) ===\n看这张图。\nKeep my words verbatim."
+    "host_text": "=== from fastctx (user attachments, v2) ===\nThe user attached these files. Each original stays on owner.machine at path; sizes are in bytes. Look at one on its machine, as in `on MACHINE fastctx view PATH`; images come back as images.\n{\"delivery\":\"talk-ab12\",\"from\":\"phone\",\"attachments\":[{\"id\":\"attachment-ab12\",\"owner\":{\"machine\":\"laptop\",\"resident\":\"codex-ab12\"},\"conversation\":{\"machine\":\"desktop\",\"resident\":\"codex-ab12\"},\"town\":\"world\",\"path\":\"C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png\",\"name\":\"截图.png\",\"media_type\":\"image/png\",\"size\":3145728,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n=== user's words (verbatim) ===\n看这张图。\nKeep my words verbatim."
   },
   "composer": {
     "snapshots": [
@@ -20491,6 +20511,16 @@
             "editing": true,
             "sending": false,
             "error": null
+          }
+        ],
+        "commands": [
+          {
+            "id": "control-1792585279907-0-ab12",
+            "after": null
+          },
+          {
+            "id": "control-1792585279908-1-cd34",
+            "after": "queued-ab12"
           }
         ],
         "unobserved": [],
@@ -20545,6 +20575,16 @@
             "editing": true,
             "sending": false,
             "error": null
+          }
+        ],
+        "commands": [
+          {
+            "id": "control-1792585279907-0-ab12",
+            "after": null
+          },
+          {
+            "id": "control-1792585279908-1-cd34",
+            "after": "queued-ab12"
           }
         ],
         "unobserved": [],
@@ -21795,6 +21835,7 @@
   "stats": {
     "stats": [
       {
+        "run": "5f3a9c",
         "machine": "desktop",
         "at": "2026-10-13T08:30:00Z",
         "boot": "2026-10-10T01:12:40Z",
@@ -21861,6 +21902,10 @@
         "lines": [
           {
             "hub": "home",
+            "kept": {
+              "trips": 41,
+              "changes": 3
+            },
             "since": "2026-10-13T07:58:10Z",
             "up": true,
             "trips": [
@@ -21935,6 +21980,10 @@
         "lines": [
           {
             "hub": "home",
+            "kept": {
+              "trips": 41,
+              "changes": 3
+            },
             "since": "2026-10-13T08:00:00Z",
             "up": false,
             "through": "desktop",
@@ -22371,13 +22420,19 @@
         "agent": "claude",
         "dir": "/home/me/.claude",
         "query": {
-          "person": null,
+          "person": {
+            "account": null,
+            "with_machine": false
+          },
           "model": null,
           "source": "agent",
           "outcome": null,
           "conversation": null,
           "turn": null,
-          "before": null
+          "before": null,
+          "from": "2026-10-20T12:00:00Z",
+          "until": null,
+          "page": 2
         }
       }
     ],
@@ -22391,7 +22446,8 @@
               "key": "example-request"
             },
             "who": null,
-            "model": "claude-haiku-5-5",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium",
             "tokens": {
               "input": 100,
               "output": 50
@@ -22416,7 +22472,8 @@
               "key": "example-request"
             },
             "who": null,
-            "model": "claude-haiku-5-5",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium",
             "tokens": {
               "input": 100,
               "output": 50
@@ -22439,7 +22496,8 @@
         "next": {
           "at": "2026-10-20T12:00:00Z",
           "key": "next-page"
-        }
+        },
+        "total": 240
       }
     ],
     "remote_calls": [
@@ -22448,13 +22506,19 @@
         "agent": "claude",
         "dir": "/home/me/.claude",
         "query": {
-          "person": null,
+          "person": {
+            "account": null,
+            "with_machine": false
+          },
           "model": null,
           "source": "agent",
           "outcome": null,
           "conversation": null,
           "turn": null,
-          "before": null
+          "before": null,
+          "from": "2026-10-20T12:00:00Z",
+          "until": null,
+          "page": 2
         }
       }
     ],
@@ -22468,7 +22532,8 @@
               "key": "example-request"
             },
             "who": null,
-            "model": "claude-haiku-5-5",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium",
             "tokens": {
               "input": 100,
               "output": 50
@@ -22493,7 +22558,8 @@
               "key": "example-request"
             },
             "who": null,
-            "model": "claude-haiku-5-5",
+            "model": "claude-sonnet-5-5",
+            "effort": "medium",
             "tokens": {
               "input": 100,
               "output": 50
@@ -22516,7 +22582,8 @@
         "next": {
           "at": "2026-10-20T12:00:00Z",
           "key": "next-page"
-        }
+        },
+        "total": 240
       }
     ]
   }

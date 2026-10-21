@@ -72,6 +72,8 @@ async function removed($, fresh = false) {
 
 __FASTCTX_CONTROLS__
 __FASTCTX_COMMANDS__
+__FASTCTX_ASSISTED__
+__FASTCTX_ACCOUNT_AGENTS__
 __FASTCTX_SELECTION__
 __FASTCTX_REWIND__
 __FASTCTX_OBSERVATIONS__
@@ -314,6 +316,7 @@ async function submit($, context, deliveries, prompt) {
     }
     // What rides with the next turn goes in just before the prompt that
     // starts it: this plugin's own prompt reaches none of its own hooks.
+    await accountAgentsBeforeSubmit($, context)
     await alongBefore($, context)
     // Its row and turn can come before the call answers.
     context.accepted.push(deliveries)
@@ -423,6 +426,7 @@ async function alongBefore($, context) {
 // that starts it; the turn it starts takes it (`startTurn`).
 async function alongPrompt($, context, e, next) {
   if (e.turnId !== undefined || e.command !== undefined || context.closed) return next(e)
+  await refreshAccountAgents($, context)
   const { along, texts, keep } = alongNext(context)
   if (texts.length === 0) return next(e)
   let result
@@ -508,6 +512,7 @@ async function look($, context) {
       context.writing = written.catch(() => {})
       try {
         await written
+        await recoverAccounting($, context)
         if (!context.closed && current) await looked($, context)
       } catch (error) {
         context.unsettled = true
@@ -685,7 +690,7 @@ async function startSession($, context) {
   context.dir = await reserving
   // A reload can happen in the same clock tick, with old reports still
   // pending. Their reserved names survive in events or applied.
-  for (const sub of ['events', 'applied']) {
+  for (const sub of ['events', 'applied', 'accounting']) {
     await $.fs.write(context.dir + '/' + sub + '/.created', '')
     const names = await listing($, context, sub)
     if (names === null) throw new Error('cannot recover the report sequence')
@@ -706,6 +711,7 @@ async function startSession($, context) {
   if (parent.exitCode !== 0) throw new Error('identifying the Claude host: ' + parent.stderr)
   registration.process = JSON.parse(parent.stdout)
   context.hostProcess = registration.process
+  await initializeAccounting($, context)
   const files = (await $.fs.list(context.dir)).map((entry) => entry.name)
   if (files.includes('activity.json')) {
     const previous = JSON.parse(await $.fs.read(context.dir + '/activity.json'))
@@ -945,6 +951,9 @@ const FOCUS_BLOCK = 'machinesAndFolders'
 // None where it works in no project.
 const USER_BLOCK = 'userInstructions'
 const PROJECT_BLOCK = 'projectRecord'
+// How the account wants its subagents used, as it was last read with them
+// (`refreshAccountAgents`).
+const SUBAGENT_BLOCK = 'subagentInstructions'
 
 async function blockText($, context, name) {
   try {
@@ -967,6 +976,7 @@ async function session($, registry, id, renew = false) {
   const retried = context !== undefined && context.failedAt !== undefined && Date.now() - context.failedAt >= START_AGAIN_MS
   if (!context || (renew && context.closed) || retried) {
     context = conversation(id, retried ? context.previous : registry.cleared)
+    context.registeredAgents = registry.registeredAccountAgents
     // Session switches keep their order even within one clock tick or when
     // the wall clock moves backwards. The node uses registration time to
     // keep late reports from moving the resident's delivery address back.
@@ -1000,19 +1010,42 @@ async function route($, registry, name, e) {
 }
 
 export function register(on) {
-  const registry = { sessions: new Map(), turns: new Map(), toolOwners: new Map(), cleared: null, worldTools: new Set(), provedCalls: new Set() }
+  const registry = { registeredAccountAgents: new Set(), sessions: new Map(), turns: new Map(), toolOwners: new Map(), cleared: null, worldTools: new Set(), provedCalls: new Set() }
   // Every handler first steps aside once fastctx is being removed. Each keeps
   // its literal on('…') call, the shape the official loader reads.
+  on('telemetry.log', { to: 'collector' }, async ($, e, next) => {
+    if (e.event === 'api_request' && !await removed($)) {
+      try {
+        const id = e.attributes['session.id'] ?? await $.session.id()
+        const context = await session($, registry, id)
+        await pricedRequest($, context, e)
+      } catch (error) {
+        worldFailure($, 'request accounting', error)
+      }
+    }
+    return next(e)
+  }).catch(($, e, next) => continueWithoutWorld($, 'telemetry.log', e, next))
   on('session.start', async ($, e, next) => {
     await usageOrigin($, await $.session.id())
     if (await removed($)) return next(e)
     await worldTools($, registry)
     // The session's directory is reserved before its controls make or
     // watch anything in it (`reservations`).
-    await session($, registry, await $.session.id(), true)
+    const context = await session($, registry, await $.session.id(), true)
+    // The session begins with the account's subagents as they are, listed
+    // and in its context.
+    await refreshAccountAgents($, context)
+    context.heardAccountAgents = context.accountAgentRevision
     await startControls($)
     return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'session.start', e, next))
+  on('agent.offer', async ($, e, next) => {
+    if (await removed($)) return next(e)
+    const context = registry.sessions.get(await $.session.id())
+    if (!context) return next(e)
+    const offered = offerAccountAgent(context, e)
+    return offered === null ? next(e) : { isOffered: offered }
+  }).catch(($, e, next) => continueWithoutWorld($, 'agent.offer', e, next))
   on('turn.start', async ($, e, next) => {
     if (await removed($)) return next(e)
     return startTurn($, await route($, registry, 'turn.start', e), e, next)
@@ -1037,8 +1070,19 @@ export function register(on) {
     return yield* measuredStep($, context, shown, reported, input, held ?? next, held !== null)
   }).catch(async function* ($, e, next) { return yield* streamWithoutWorld($, 'turn.step', e, next) })
   on('tool.call', async ($, e, next) => {
+    try {
+      const refused = await assistedTool($, e)
+      if (refused !== null) return refused
+    } catch (_) {
+      return { deny: 'Fastctx could not verify the assisted conversation policy for this tool call.' }
+    }
     if (await removed($)) return next(e)
     registry.provedCalls.delete(e.tool_use_id)
+    // Strict MCP tools can arrive after session.start; confirm ownership
+    // before issuing their first proof (2.1.303, 2026-10-21).
+    if (!registry.worldTools.has(e.tool) && e.tool.startsWith('mcp__fastctx__') && await assistedSession($)) {
+      await worldTools($, registry)
+    }
     const context = await route($, registry, 'tool.call', e)
     if (registry.worldTools.has(e.tool)) {
       try {
@@ -1099,9 +1143,11 @@ export function register(on) {
     if (await removed($)) return next(e)
     const result = await next(e)
     const context = await session($, registry, await $.session.id())
+    context.heardAccountAgents = context.accountAgentRevision
     const added = [
       { name: FOCUS_BLOCK, text: await focus($, context) },
       { name: USER_BLOCK, text: await blockText($, context, 'user.md') },
+      { name: SUBAGENT_BLOCK, text: context.subagentInstructions || null },
       { name: PROJECT_BLOCK, text: await blockText($, context, 'project.md') },
     ].filter((block) => block.text !== null)
     if (!added.length) return result
@@ -1130,8 +1176,17 @@ export function register(on) {
     // hook under next publishes the answerable request with that contract.
     return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'classic.Elicitation', e, next))
+  on('command.run', async ($, e, next) => {
+    if (await assistedCommand($, e.command)) return { text: assistedCommandReason, exitCode: 1 }
+    if (e.command === 'model' && await assistedSession($)) {
+      const result = await controlSelection($, await controlBegin($, sessions), e.args.trim(), null)
+      return { text: result.said ?? '', exitCode: result.kind === 'refused' ? 1 : 0 }
+    }
+    return next(e)
+  }).catch(() => ({ text: 'Fastctx could not verify the assisted conversation command policy.', exitCode: 1 }))
   on('command.describe', async ($, e, next) => {
     const result = await next(e)
+    if (await assistedCommand($, e.command)) return { ...result, isHidden: true }
     if (await removed($)) return result
     const id = await $.session.id()
     if (!commandDescriptions.has(id)) commandDescriptions.set(id, new Map())
@@ -1199,9 +1254,9 @@ export function register(on) {
   }).catch(($, e, next) => continueWithoutWorld($, 'session.end', e, next))
   on('classic.SessionStart', async ($, e, next) => {
     if (await removed($)) return next(e)
-    await startControls($)
     await worldTools($, registry)
     const context = await session($, registry, await $.session.id(), e.source === 'clear' || e.source === 'resume')
+    await startControls($)
     await transcript($, context, e.transcript_path)
     await observeTitle($, context, e)
     return next(e)
@@ -1219,14 +1274,20 @@ async function proveCall($, context, id) {
 
 async function worldTools($, registry) {
   registry.worldTools = new Set()
-  const connected = await $.mcp.connect('fastctx')
-  if (!connected.isConnected) return
+  // In strict mode this is an explicit global server. A mod's connect()
+  // resolves its plugin's server instead, which strict mode excludes.
+  let server = 'fastctx'
+  if (!await assistedSession($)) {
+    const connected = await $.mcp.connect('fastctx')
+    if (!connected.isConnected) return
+    server = connected.server
+  }
   // connect answers the server's name as /mcp lists it, which for a
   // deduplicated server is the name it runs under; a tool carries the
   // name's tool-name spelling, every character outside [A-Za-z0-9_-] made
   // `_` (`claude.ai Gmail`, `claude_ai_Gmail` in the mod reference; 2.1.289
   // lists `plugin:fastctx-world:fastctx` and `plugin_fastctx-world_fastctx`).
-  const spelled = connected.server.replace(/[^A-Za-z0-9_-]/g, '_')
+  const spelled = server.replace(/[^A-Za-z0-9_-]/g, '_')
   const usage = await $.session.usage({ breakdown: 'summary' })
   if (usage.context.breakdown === undefined) throw new Error('the host did not provide its MCP tool ownership map')
   const owners = new Map()
@@ -1234,5 +1295,5 @@ async function worldTools($, registry) {
     if (owners.has(tool.name) && owners.get(tool.name) !== tool.serverName) owners.set(tool.name, null)
     else if (!owners.has(tool.name)) owners.set(tool.name, tool.serverName)
   }
-  registry.worldTools = new Set([...owners].filter(([, server]) => server === connected.server || server === spelled).map(([name]) => name))
+  registry.worldTools = new Set([...owners].filter(([, owner]) => owner === server || owner === spelled).map(([name]) => name))
 }
