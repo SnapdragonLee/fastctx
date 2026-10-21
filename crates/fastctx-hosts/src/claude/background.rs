@@ -36,10 +36,8 @@ pub struct Start<'a> {
     pub first_words: &'a str,
     pub model: Option<&'a str>,
     pub reasoning_effort: Option<&'a str>,
-    /// The login assists another account (`world-network.md`, 共享机器与
-    /// 智能体协助): it goes without Claude in Chrome, which works the browser
-    /// of the machine it runs on. Everything else of the login comes along as
-    /// its owner set it up; an assisting agent is a whole one.
+    /// The login assists another account: only the explicitly supplied World
+    /// plugin, MCP configuration and session settings are loaded.
     pub assisting: bool,
 }
 
@@ -78,7 +76,7 @@ fn settings_args(start: &Start) -> Vec<OsString> {
         start.instructions.into(),
     ];
     if start.assisting {
-        args.push("--no-chrome".into());
+        args.extend(["--no-chrome".into(), "--strict-mcp-config".into(), "--setting-sources=".into()]);
     }
     if let Some(model) = start.model {
         args.extend(["--model".into(), model.into()]);
@@ -103,9 +101,10 @@ pub fn started(printed: &str) -> Option<String> {
 /// How Claude Code refuses to start a session in a directory not trusted.
 pub const UNTRUSTED: &str = "Workspace not trusted";
 
-/// The one way to wake a stopped session as it was.
+/// The one way to wake a stopped session as it was. The words follow `--`,
+/// as when a session starts: words that begin with `-` are not options.
 pub fn wake_args(session: &str, words: &str) -> Vec<OsString> {
-    vec!["--resume".into(), session.into(), "--bg".into(), words.into()]
+    vec!["--resume".into(), session.into(), "--bg".into(), "--".into(), words.into()]
 }
 
 /// Runs `claude` with `args` in `cwd` and the environment `env`, and

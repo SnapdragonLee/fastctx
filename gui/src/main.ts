@@ -154,7 +154,7 @@ import {
 import { enRemoval, zhRemoval } from "./app/removal-words";
 import { enAccess, enLogin, enMachines, enToken, zhAccess, zhLogin, zhMachines, zhToken } from "./app/account-words";
 import { LASTING, loginsOf, type AccountChange, type Login, type TokenSeen, type TokenWay } from "./world/accounts";
-import { assistantOf, assistantsOf, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
+import { assistantOf, assistantsOf, assistingOwner, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
 import type { FocusPlace } from "./app/focus-panel";
 import { folders as foldersOf, noFocus, type Focus, type Folders } from "./world/focus";
 import { ComposerSession } from "./conversation/composer";
@@ -708,7 +708,7 @@ const tokens = new Tokens({
       : specimenCode(login, kind === "phone" ? "scan" : "paste", kind, asked),
   server: (login, asked) =>
     live
-      ? serverCommand(login.hubName, login.account, asked.name, codeExpires(asked), asked.managed, asked.uses === 1 ? null : asked.uses, asked.label, asked.windows ?? false)
+      ? serverCommand(login.hubName, login.account, asked.name, codeExpires(asked), asked.managed, asked.uses === 1 ? null : asked.uses, asked.label, asked.windows ?? false, asked.mac ?? false)
       : specimenCode(login, "line", "computer", asked).then(() => "echo 'Specimen: no real token or download'"),
   codes: (login) => codesOf(store.world.peek()?.accounts.hubs.find((hub) => hub.hub === login.hub), login, new Date()),
   revoke: revokeCode,
@@ -763,7 +763,6 @@ const projectActs = new ProjectActs({
     const world = store.world.peek();
     return [...residentsOf(world, true), ...unreachedOf(world, true)].filter((r) => r.town === town);
   },
-  forget: (r) => talkActs.delete(r),
   deleted: (town) => {
     // A page of the project deleted is left for the front page.
     const at = placeOf(location.hash);
@@ -784,6 +783,8 @@ const talkMenu = new TalkMenu({
   acts: talkActs,
   towns: townsOn,
   reachable: (r) => !isUnreached(r),
+  someone: (r) => someoneSaid(r),
+  place: (r) => placeSaid(r),
   askDelete: (r, then) => askForget(r, then),
 });
 effect(() => {
@@ -802,13 +803,26 @@ const forgetConfirm = new Confirm({ close: talkMenuWords.cancel, working: talkMe
 /** Asks before a conversation is deleted everywhere: what goes, and that it
  *  is stopped first or deleted once its machine is back where so; `then`
  *  once it is asked. */
+/** Who a conversation is with, where it has no name of its own: the agent
+ *  on its machine, or for one assisting the user, whose agent, never the
+ *  computer it runs on (`world-network.md`, 共享机器与智能体协助). */
+function someoneSaid(r: ResidentNow, said: { someone(agent: string, machine: string): string; someoneAssisting(agent: string, owner: string): string } = shellWords): string {
+  const agent = agentName(r.about.host.agent);
+  const owner = assistingOwner(store.world.peek(), r.about.machine);
+  return owner !== null ? said.someoneAssisting(agent, owner) : said.someone(agent, r.about.machine);
+}
+
+/** Where a conversation is said to be: its machine, or whose agent it is. */
+function placeSaid(r: ResidentNow): string {
+  return assistingOwner(store.world.peek(), r.about.machine) !== null ? someoneSaid(r) : r.about.machine;
+}
+
 function askForget(r: ResidentNow, then?: () => void): void {
   const words = talkMenuWords;
   const shown = talkActs.view(r);
-  const agent = agentName(r.about.host.agent);
-  const name = titleOf(shown) ?? `${agent} ${r.about.machine}`;
+  const name = titleOf(shown) ?? someoneSaid(r);
   const working = !isUnreached(r) && (r.now?.activity === "busy" || !!r.now?.turn);
-  const also = [working ? words.deleteWorking : "", isUnreached(r) ? words.deleteAway(r.about.machine) : ""].filter(Boolean);
+  const also = [working ? words.deleteWorking : "", isUnreached(r) ? words.deleteAway(placeSaid(r)) : ""].filter(Boolean);
   forgetConfirm.ask({
     title: words.deleteTitle(name),
     what: words.deleteWhat,
@@ -966,11 +980,14 @@ const updateCard = new UpdateCard(appUpdates, updateWords, live ? !onComputer() 
   // for may update, that can take a newer version.
   count: async () => {
     const world = store.world.peek();
+    // Every login's view, each machine counted once.
+    const able = new Set<string>();
     for (const login of loginsOf(world?.accounts)) {
-      const reply = await askUpdatesView(login.hub, login.account, { do: "view" }).catch(() => null);
-      if (reply?.kind === "view") return reply.view.machines.filter((one) => one.machine !== world?.here && one.offer && one.actions.update.allowed).length;
+      const reply = await askUpdatesView(login.hubName, login.account, { do: "view" }).catch(() => null);
+      if (reply?.kind !== "view") continue;
+      for (const one of reply.view.machines) if (one.machine !== world?.here && one.offer && one.actions.schedule.allowed) able.add(one.machine);
     }
-    return 0;
+    return able.size;
   },
   open: () => {
     showUpdatesNext();
@@ -1066,6 +1083,7 @@ function stateOf(world: WorldNow, away: Away | null): WorldState {
     known: [...residentsOf(world, true), ...unreachedOf(world, true)],
     others: world.who.others ?? [],
     nodes: machinesOf(world),
+    assisting: new Map(assistantsOf(world).map((one) => [one.machine, one.owner ?? ""])),
     towns: world.towns,
     away,
   };
@@ -1140,7 +1158,7 @@ function windowDrops(on: { over(over: boolean): void; dropped(paths: string[]): 
 function exported(conversation: Conversation, someone: Someone): () => Promise<string> {
   return () =>
     markdownOf(conversation, words, {
-      title: conversation.title ?? `${someone.agent} ${someone.machine}`,
+      title: conversation.title ?? (someone.assistFrom ? shellWords.someoneAssisting(someone.agent, someone.assistFrom) : `${someone.agent} ${someone.machine}`),
       agent: someone.agent,
       you: homeWords.you,
       plan: words.plan,
@@ -1152,7 +1170,7 @@ function exported(conversation: Conversation, someone: Someone): () => Promise<s
  *  id where it does not. */
 function someoneAt(address: Address): string {
   const known = listedAt(store.world.peek(), address);
-  return known ? shellWords.someone(agentName(known.about.host.agent), known.about.machine) : `${address.resident} ${address.machine}`;
+  return known ? someoneSaid(known) : `${address.resident} ${address.machine}`;
 }
 
 /** The card about the agent in a conversation, and how to fill it. */
@@ -1853,6 +1871,7 @@ function projectPage(town: string): Page {
   const page = new ProjectPage({
     words: projectWords,
     home: homeWords,
+    someone: (r) => someoneSaid(r, homeWords),
     town,
     head,
     newTalk: shellWords.newTalk,
@@ -2546,8 +2565,8 @@ new Palette({
         .filter((r) => r.here || r.now?.waiting_for_user)
         .map((r) => ({
           group: paletteWords.agents,
-          label: titleOf(r) ?? shellWords.someone(agentName(r.about.host.agent), r.about.machine),
-          note: [titleOf(r) ? shellWords.someone(agentName(r.about.host.agent), r.about.machine) : null, r.town].filter(Boolean).join(" "),
+          label: titleOf(r) ?? someoneSaid(r),
+          note: [titleOf(r) ? someoneSaid(r) : null, r.town].filter(Boolean).join(" "),
           run: go({ kind: "talk", address: { resident: r.about.id, machine: r.about.machine } }),
         })),
       ...(inNoNetwork(world) ? [] : machinesOf(world)).map((machine) => ({
@@ -2687,7 +2706,7 @@ if (live && onPhone()) {
 startPresence({
   store,
   words: presenceWords,
-  someone: (r) => shellWords.someone(agentName(r.about.host.agent), r.about.machine),
+  someone: (r) => someoneSaid(r),
   stop: (address) => stop(address),
   // An answer from a notification goes in once, however long the way is
   // closed (`world-network.md`, 断开不是结束).

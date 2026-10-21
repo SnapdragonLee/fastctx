@@ -74,6 +74,8 @@ export class FastctxBlock {
   private said: string | null = null;
   private timer = 0;
   private asking = false;
+  /** The machine was away when last asked: it is asked as soon as it is back. */
+  private away = false;
   private shown = false;
   private subject: FastctxSubject | null = null;
 
@@ -90,7 +92,8 @@ export class FastctxBlock {
     }
     const was = this.shown;
     this.shown = shown;
-    if (shown && !was) void this.ask(subject);
+    // Shown again, or back online after it was not asked while away.
+    if (shown && (!was || (this.away && subject?.machine.online !== false))) void this.ask(subject);
     if (!shown) clearTimeout(this.timer);
   }
 
@@ -105,10 +108,11 @@ export class FastctxBlock {
     if (!subject || !this.shown || this.asking) return;
     const { machine, manages } = subject;
     const older = this.older(subject);
-    if (machine.here || !manages || machine.online === false || older) return;
+    this.away = machine.online === false;
+    if (machine.here || !manages || this.away || older) return;
     this.asking = true;
     try {
-      this.state = await this.options.remote(machine.name, { do: "state" });
+      this.state = await this.options.remote(machine.written, { do: "state" });
       this.problem = null;
     } catch (error) {
       this.problem = error instanceof Error ? error.message : String(error);
@@ -269,7 +273,7 @@ export class FastctxBlock {
           settings.auto = target.dataset.value === "on";
           settings.chosen = true;
         } else settings.relays = target.dataset.value === "on";
-        this.act(this.options.remote(machine.name, { do: "set", settings }));
+        this.act(this.options.remote(machine.written, { do: "set", settings }));
         return true;
       }
     }
@@ -290,13 +294,13 @@ export class FastctxBlock {
         who: machine.written,
         running,
         state,
-        ...(away ? {} : { look: () => this.options.remote(machine.name, { do: "look" }) }),
+        ...(away ? {} : { look: () => this.options.remote(machine.written, { do: "look" }) }),
       },
       {
         kind: "update",
         pick: async (version) => {
           if (away) await this.options.due(manages, machine.name, version);
-          else this.state = await this.options.remote(machine.name, { do: "kernel", version });
+          else this.state = await this.options.remote(machine.written, { do: "kernel", version });
           this.options.changed();
           void this.ask();
         },

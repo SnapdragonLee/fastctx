@@ -131,7 +131,7 @@ async fn stamp(node: &Arc<Node>, resident: &ResidentId) -> Result<Option<String>
         // would not change.
         ("codex", Some(_)) if !about.world_started => return Ok(None),
         ("codex", Some(thread)) => {
-            let codex = node.codex.of(&about)?;
+            let codex = node.codex.of(node, &about)?;
             take(codex.stamp(thread).await.map_err(Failure::new)?.as_bytes());
         }
         ("claude", _) => crate::claude::history::stamp(node, resident, &mut take),
@@ -149,16 +149,17 @@ fn random() -> Result<[u8; 16], Failure> {
 pub(crate) async fn item_detail(
     node: &Arc<Node>,
     resident: ResidentId,
-    machine: Option<fastctx_types::MachineName>,
+    machine: Option<fastctx_types::access::Written>,
     turn: Option<String>,
     item: String,
 ) -> Result<(Address, Option<serde_json::Value>), Failure> {
+    let local = machine.is_none() && node.residents.about(&resident).is_some();
     let machine = match machine {
-        Some(machine) => machine.into(),
+        Some(machine) => machine,
         None if node.residents.about(&resident).is_some() => node.machine().into(),
         None => crate::colleagues::find_for(node, &fastctx_types::access::Acting::Here, &resident).await?,
     };
-    if machine.hub.is_none() && node.is_me(&machine.name) {
+    if local || node.is_here(&machine) {
         let detail = item_detail_here(node, &resident, turn.as_deref(), &item).await?;
         return Ok((Address { machine: machine.name, resident }, detail));
     }

@@ -1132,6 +1132,7 @@ pub async fn deliver(
                 Ok(true) => {
                     match wake(
                         node,
+                        to,
                         about.home.as_deref(),
                         &session,
                         if as_user { text } else { claude::framed(&text) },
@@ -1278,6 +1279,7 @@ async fn running(node: &Arc<Node>, home: Option<&Path>, session: &str) -> Result
 
 async fn wake(
     node: &Arc<Node>,
+    resident: &ResidentId,
     home: Option<&Path>,
     session: &str,
     words: String,
@@ -1285,6 +1287,7 @@ async fn wake(
 ) -> Result<Landed, Failure> {
     let launching = command(node, home)?;
     oldest::check(node, &launching).await?;
+    let observing = launching.clone();
     let Command { program, cwd, env } = launching;
     if let Some(resident) = node.residents.resident_of_thread(session) {
         crate::profile::session::claude(node, &resident, false)?;
@@ -1299,6 +1302,9 @@ async fn wake(
     .await
     .map_err(|error| Failure::new(format!("waking the session: {error}")))?
     .map_err(Failure::new)?;
+    // Claude Code took the words; the session that takes them may still end
+    // before the World's plugin pairs, which only watching it tells.
+    startup::observe(node, resident, id.clone(), observing, true);
     Ok(Landed::Handed { id })
 }
 
@@ -1372,7 +1378,7 @@ pub async fn open_here(
     // A login assisting another account starts without the browser of this
     // machine (`background::Start::assisting`).
     crate::profile::session::ready(node, &opened.acting).await?;
-    let assisting = node.works_here(&opened.acting).is_err();
+    let assisting = crate::assists::host::starting(node, &id, &opened.acting)?;
     let (words, heard) =
         crate::colleagues::instructions(node, &id, town.as_ref(), &Origin::User, &opened.acting, false).await?;
     // What it is told of its machines and folders its plugin adds to the
@@ -1380,6 +1386,7 @@ pub async fn open_here(
     crate::focus::open(node, &node.world.conversation(&id), &opened.acting, &opened.focus).await?;
     let born_at = Timestamp::now();
     let about = About {
+        forked_from: None,
         mcp_off: options.mcp_off.clone(),
         id: id.clone(),
         host: Host { agent, client: "claude-code".to_string(), version: String::new() },
@@ -1497,7 +1504,7 @@ pub async fn open_here(
         .map_err(|error| Failure::new(format!("recording which session {id} is: {error}")))?;
     drop(_birth);
     replay(node).await;
-    startup::observe(node, &id, first.delivery.id.clone(), launching);
+    startup::observe(node, &id, first.delivery.id.clone(), launching, false);
     Ok((id, Landed::Handed { id: first.delivery.id }))
 }
 

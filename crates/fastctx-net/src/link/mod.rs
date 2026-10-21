@@ -36,6 +36,7 @@ mod profile;
 mod questions;
 mod session;
 pub mod state;
+mod update_policy;
 pub mod versions;
 mod ways;
 
@@ -447,6 +448,7 @@ impl Link {
             }
             Err(error) => return Err(error),
         };
+        let policy = update_policy::UpdatePolicy::read(dir.path())?;
         let (status, _) = watch::channel(Status::Connecting { since: Timestamp::now(), last_error: None });
         let inner = Arc::new_cyclic(|this| Inner {
             this: this.clone(),
@@ -485,7 +487,7 @@ impl Link {
             line: Mutex::default(),
             direct: direct::Direct::default(),
             afoots: afoot::Afoots::default(),
-            versions: versions::Versions::default(),
+            versions: versions::Versions::with_policy(policy),
             task: Mutex::new(None),
         });
         inner.line_started();
@@ -747,6 +749,14 @@ impl Link {
             self.inner.node.log(format!("asking the hub for the view after a change: {error}"));
         }
         Ok(told)
+    }
+
+    /// Acknowledges a project deletion after this member finished its local work.
+    pub async fn project_deleted(&self, town: &fastctx_types::access::TownId) -> Result<(), String> {
+        match self.inner.ask(Question::ProjectDeleted { town: town.clone() }).await? {
+            Told::Done => Ok(()),
+            _ => Err("the hub did not acknowledge the project deletion".into()),
+        }
     }
 
     /// The account of this member's logins the conversation of `resident`

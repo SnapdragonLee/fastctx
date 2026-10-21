@@ -4,27 +4,29 @@
 //! list; deleting it is `crate::forget`'s.
 
 use crate::{Node, speech};
+use fastctx_types::access::Written;
 use fastctx_types::access::{Acting, Purpose};
 use fastctx_types::ipc::Failure;
 use fastctx_types::management::{Managed, Management, ManagementOutcome as Outcome, ManagementStep};
 use fastctx_types::remote::{RemoteCall, RemoteReply};
 use fastctx_types::residents::{Activity, Delivery, Notice, WorldFact};
-use fastctx_types::{Address, MachineName, ResidentId, TownName};
+use fastctx_types::{Address, ResidentId, TownName};
 use jiff::Timestamp;
 use std::sync::Arc;
 
 pub async fn manage(
     node: &Arc<Node>,
     resident: ResidentId,
-    machine: Option<MachineName>,
+    machine: Option<Written>,
     action: Management,
 ) -> Result<(Address, Managed), Failure> {
+    let local = machine.is_none() && node.residents.about(&resident).is_some();
     let machine = match machine {
-        Some(machine) => machine.into(),
+        Some(machine) => machine,
         None if node.residents.about(&resident).is_some() => node.machine().into(),
         None => crate::colleagues::find_for(node, &Acting::Here, &resident).await?,
     };
-    let managed = if machine.hub.is_none() && node.is_me(&machine.name) {
+    let managed = if local || node.is_here(&machine) {
         here(node, &resident, action).await?
     } else {
         if matches!(action, Management::Mcp { .. }) {
@@ -93,7 +95,7 @@ pub async fn here(node: &Arc<Node>, id: &ResidentId, action: Management) -> Resu
             let host = match (about.host.agent.as_str(), &about.session, about.world_started) {
                 ("codex", Some(thread), _) => {
                     crate::codex::claim(node, thread, id).await;
-                    match node.codex.of(&about) {
+                    match node.codex.of(node, &about) {
                         Ok(codex) => codex.archive(thread).await.map_err(Failure::new),
                         Err(failure) => Err(failure),
                     }
@@ -158,7 +160,7 @@ pub async fn here(node: &Arc<Node>, id: &ResidentId, action: Management) -> Resu
                 return Ok(result);
             }
             let host = match (about.host.agent.as_str(), &about.session) {
-                ("codex", Some(thread)) => match node.codex.of(&about) {
+                ("codex", Some(thread)) => match node.codex.of(node, &about) {
                     Ok(codex) => codex.unarchive(thread).await.map_err(Failure::new),
                     Err(failure) => Err(failure),
                 },
@@ -212,11 +214,11 @@ pub async fn here(node: &Arc<Node>, id: &ResidentId, action: Management) -> Resu
                 );
             } else if let Some(session) = &about.session {
                 let effect: Result<bool, Failure> = match (about.host.agent.as_str(), sleeping) {
-                    ("codex", true) => match node.codex.of(&about) {
+                    ("codex", true) => match node.codex.of(node, &about) {
                         Ok(codex) => codex.sleep(session).await.map_err(Failure::new),
                         Err(failure) => Err(failure),
                     },
-                    ("codex", false) => match node.codex.of(&about)?.prepare(session).await {
+                    ("codex", false) => match node.codex.of(node, &about)?.prepare(session).await {
                         Ok(missing) => {
                             if let Some(why) = missing {
                                 step(&mut result, "tools", Outcome::Failed, why);
@@ -307,7 +309,7 @@ pub async fn here(node: &Arc<Node>, id: &ResidentId, action: Management) -> Resu
                 )
                 .await
                 {
-                    Ok((spec, _)) => match node.codex.of(&about) {
+                    Ok((spec, _)) => match node.codex.of(node, &about) {
                         Ok(codex) => codex.adopt(thread, spec),
                         Err(failure) => step(&mut result, "host", Outcome::Failed, failure.message),
                     },

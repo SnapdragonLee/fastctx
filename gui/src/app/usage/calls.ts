@@ -130,6 +130,7 @@ export class CallsList {
 
   leave(): void {
     this.generation += 1;
+    this.reading = false;
   }
 
   /** The rows asked for: the query, and whom they are narrowed to here. */
@@ -196,17 +197,19 @@ export class CallsList {
   }
 
   /** A page from where it starts. Where the machine could not narrow the
-   *  rows, the pages after it are read on until a page's worth shows. */
+   *  rows, the pages after it are read on until a page's worth shows, and
+   *  the next page starts after the last row kept. */
   private async fetch(before: CallCursor | null): Promise<UsageCallsPage> {
     let page = await this.options.ask(this.query(before));
     const person = this.context?.person;
     if (!person || person.account) return page;
-    const rows = [...page.rows];
-    for (let read = 1; page.next && read < FILL && this.keep(rows).length < PAGE; read += 1) {
+    let kept = this.keep(page.rows);
+    for (let read = 1; page.next && read < FILL && kept.length < PAGE; read += 1) {
       page = await this.options.ask(this.query(page.next));
-      rows.push(...page.rows);
+      kept = kept.concat(this.keep(page.rows));
     }
-    return { rows, next: page.next };
+    if (kept.length > PAGE) return { rows: kept.slice(0, PAGE), next: kept[PAGE - 1]!.cursor };
+    return { rows: kept, next: page.next };
   }
 
   /** The page's start in view: its rows from the top, and the panel's head
@@ -414,6 +417,7 @@ export class CallsList {
     const rough = row.timing.approximate;
     const own = row.conversation !== null;
     const model = row.model ? modelName(row.model) : null;
+    const usd = row.usd === null ? null : row.usd / 1_000_000;
 
     // The sentences behind the row.
     const named = (kind: string) => (claude ? { read: usage.kinds.cache_read, write: usage.kinds.cache_write, input: usage.kinds.input, output: usage.kinds.output } : { input: usage.kinds.fresh, read: usage.kinds.cached, output: usage.kinds.output, reason: usage.kinds.reasoning })[kind as "input"] ?? kind;
@@ -423,7 +427,7 @@ export class CallsList {
       several ? who.name : "",
       background ? words.backgroundSaid : [model ?? "", row.source === "agent" ? words.agentTag : ""].filter(Boolean).join(words.and),
       ...kinds.filter(([, value]) => value > 0).map(([kind, value]) => `${named(kind)} ${value.toLocaleString("en-US")}`),
-      row.usd !== null ? usage.money(row.usd) : "",
+      usd !== null ? usage.money(usd) : "",
       [took !== null ? words.took(took) : "", first !== null ? words.first(first) : ""].filter(Boolean).join(words.and),
       rough && took !== null ? words.roughly : "",
       failed ? [words.outcomeSaid[row.outcome as Exclude<CallOutcome, "completed">], row.phase === "before_response" || row.phase === "streaming" ? words.phase[row.phase] : ""].filter(Boolean).join(words.and) : "",
@@ -445,7 +449,7 @@ export class CallsList {
           .map(([kind, value]) => `<i class="uc-k-${kind}" style="flex-grow:${value}"></i>`)
           .join("")}</span>`
       : "";
-    const figures = `<span class="uc-bar">${mix}</span><span class="uc-tokens">${sum ? escape(usage.tokens(sum)) : ""}</span>${claude ? `<span class="uc-usd">${row.usd !== null ? escape(usage.money(row.usd)) : ""}</span>` : ""}<span class="uc-took">${took !== null ? `${rough ? "≈" : ""}${escape(words.short(took))}` : ""}</span>`;
+    const figures = `<span class="uc-bar">${mix}</span><span class="uc-tokens">${sum ? escape(usage.tokens(sum)) : ""}</span>${claude ? `<span class="uc-usd">${usd !== null ? escape(usage.money(usd)) : ""}</span>` : ""}<span class="uc-took">${took !== null ? `${rough ? "≈" : ""}${escape(words.short(took))}` : ""}</span>`;
     const mark = failed
       ? `<span class="uc-mark ${row.outcome}">${row.outcome === "failed" ? glyph("cross", 14) : row.outcome === "interrupted" ? glyph("stop", 14) : row.outcome === "held" ? glyph("lock", 14) : "?"}</span>`
       : `<span class="uc-mark"></span>`;

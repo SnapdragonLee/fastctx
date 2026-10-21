@@ -57,6 +57,8 @@ export interface Policy {
   minimum?: string;
   /** Whether managed machines take new releases by themselves. */
   managed_auto?: boolean;
+  /** How fast the hub takes a new release in, in bytes a second; none, its default. */
+  intake?: number | null;
 }
 
 export interface UpdateNetwork {
@@ -135,6 +137,8 @@ export interface UpdateState {
   above_hub?: boolean;
   fetching?: Fetching;
   failed?: { version: string; target: string; why: string; reason?: FailureReason };
+  /** When the node tries the failed release again by itself. */
+  retry_at?: string;
   kept?: { version: string; target: string; path: string }[];
   app?: { version: string; target: string };
   kernel_target: string;

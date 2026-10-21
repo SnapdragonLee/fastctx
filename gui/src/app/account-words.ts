@@ -563,6 +563,9 @@ export interface MachinesWords {
    *  the tag on the map, the one line on its panel, and the saying behind
    *  both. */
   assistShort(owner: string): string;
+  /** A machine of another's whose agents assist the account, as the map and
+   *  the list name it: whose agents, never the machine. */
+  assistAgents(owner: string): string;
   assistantNote: string;
   assistantSaid(owner: string): string;
   /** An assisting login its machine does not list. */
@@ -825,6 +828,7 @@ export const zhMachines: MachinesWords = {
   assist: "协助",
   remove: "移除",
   assistShort: (owner) => `来自 ${owner}`,
+  assistAgents: (owner) => `${owner} 的智能体`,
   assistantNote: "在你的机器上工作",
   assistantSaid: (owner) => `${owner} 的智能体在协助你`,
   assistantGone: "该登录已不可用",
@@ -1140,6 +1144,7 @@ export const enMachines: MachinesWords = {
   assist: "Assist",
   remove: "Remove",
   assistShort: (owner) => `from ${owner}`,
+  assistAgents: (owner) => `${owner}'s agents`,
   assistantNote: "Works on your machines",
   assistantSaid: (owner) => `${owner}'s agent is assisting you`,
   assistantGone: "Login unavailable",
@@ -1454,7 +1459,7 @@ export const zhAccess: AccessWords = {
   sharedTo: "已共享给",
   shareGo: "共享",
   assistTitle: (login, machine) => `让 ${machine} 上的 ${login} 协助他人`,
-  assistWhat: "只用这个登录协助对方，不共享机器。它能读写这台电脑上你的所有文件。",
+  assistWhat: "只用这个登录协助对方，不共享机器。",
   assistSees: "会使用这个登录的订阅额度，运行过程在你的机器上可见、可停止。",
   assisting: "正在协助",
   assistGo: "协助",
@@ -1510,7 +1515,7 @@ export const enAccess: AccessWords = {
   sharedTo: "Shared with",
   shareGo: "Share",
   assistTitle: (login, machine) => `Let ${login} on ${machine} assist others`,
-  assistWhat: "Only this login assists them, not the machine. It can read and change all your files on this computer.",
+  assistWhat: "Only this login assists them, not the machine.",
   assistSees: "It uses this login's subscription. You can see and stop it on your machine.",
   assisting: "Assisting",
   assistGo: "Assist",
@@ -1609,16 +1614,18 @@ export interface TokenWords {
    *  where a line may wrap, between phrases, never inside one. */
   steps: [string, string, string];
   /** How each way in is used, in three steps each, under its drawings. */
-  joinSteps: Record<"computer" | "phone" | "line" | "windows", [string, string, string]>;
+  joinSteps: Record<"computer" | "phone" | "line" | "windows" | "mac", [string, string, string]>;
   line: string;
   /** A Linux host as a managed machine: the switch, what it means behind a
    *  pointer's rest, and why it cannot be had. */
   managed: string;
   managedWhat: string;
   managedOld: string;
-  /** How a managed machine comes in, and what its Windows line is run as. */
-  managedWays: { code: string; windows: string };
+  /** How a managed machine comes in, and what its Windows or Mac line is
+   *  run as. */
+  managedWays: { code: string; windows: string; mac: string };
   windowsCommand: string;
+  macCommand: string;
 }
 
 /** How many devices a code lets in, as its line under it says. */
@@ -1635,8 +1642,9 @@ export const zhToken: TokenWords = {
   title: "添加设备",
   kinds: { computer: "电脑", phone: "手机", server: "Linux 主机", managed: "受管机器" },
   ways: { ssh: "经 SSH", line: "一行命令" },
-  managedWays: { code: "入网码", windows: "Windows 一行命令" },
+  managedWays: { code: "入网码", windows: "Windows", mac: "Mac" },
   windowsCommand: "以管理员身份运行",
+  macCommand: "以 root 身份运行",
   added: (machine) => `${machine} 已加入`,
   hub: "中枢服务器地址",
   account: "账号",
@@ -1675,6 +1683,7 @@ export const zhToken: TokenWords = {
     phone: ["在手机上\u200b装好 Fastctx，\u200b打开", "点「加入网络」", "扫\u200b这里生成的码"],
     line: ["生成\u200b下面这一行", "在服务器的终端里\u200b粘贴运行", "它装好 Fastctx，\u200b加入网络"],
     windows: ["生成\u200b下面这一行", "以管理员身份\u200b打开命令提示符，\u200b粘贴运行", "它装好 Fastctx，\u200b成为受管机器"],
+    mac: ["生成\u200b下面这一行", "以\u00a0root\u00a0身份\u200b打开终端，\u200b粘贴运行", "它装好 Fastctx，\u200b成为受管机器"],
   },
   line: "或在那个账户的终端里运行",
   managed: "受管机器",
@@ -1686,8 +1695,9 @@ export const enToken: TokenWords = {
   title: "Add a device",
   kinds: { computer: "Computer", phone: "Phone", server: "Linux host", managed: "Managed" },
   ways: { ssh: "Over SSH", line: "One command" },
-  managedWays: { code: "Code", windows: "Windows command" },
+  managedWays: { code: "Code", windows: "Windows", mac: "Mac" },
   windowsCommand: "Run as administrator",
+  macCommand: "Run as root",
   added: (machine) => `${machine} joined`,
   hub: "Hub address",
   account: "Account",
@@ -1726,6 +1736,7 @@ export const enToken: TokenWords = {
     phone: ["Install Fastctx on the phone and open it", "Choose Join a network", "Scan the code made here"],
     line: ["Make the line below", "Paste it in the server's terminal and run it", "It installs Fastctx and joins"],
     windows: ["Make the line below", "Paste it in a Command Prompt run as administrator", "It installs Fastctx as a managed machine"],
+    mac: ["Make the line below", "Paste it in a Terminal run as root", "It installs Fastctx as a managed machine"],
   },
   line: "Or run in that account's terminal",
   managed: "Managed machine",

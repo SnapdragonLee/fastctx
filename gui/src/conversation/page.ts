@@ -1333,7 +1333,8 @@ export class ConversationPage {
     const field = document.createElement("input");
     field.className = "who-rename";
     field.value = this.options.conversation.title ?? "";
-    field.placeholder = `${this.options.someone.agent} ${this.options.someone.machine}`;
+    // An agent assisting the user is never named by the computer it runs on.
+    field.placeholder = this.options.someone.assistFrom ? this.options.someone.agent : `${this.options.someone.agent} ${this.options.someone.machine}`;
     field.setAttribute("aria-label", controls.words.commands.rename);
     this.name.replaceChildren(field);
     field.focus();
@@ -1488,10 +1489,9 @@ export class ConversationPage {
     const can = new Set(this.offered?.controls ?? []);
     const transcript = this.element.querySelector(".conversation")!;
     transcript.classList.toggle("can-rewind", can.has("rewind"));
-    // Forking from a turn is forking and then cutting the new history at
-    // that turn: a host that cannot rewind (Claude) forks only the whole
-    // conversation, from the command menu.
-    transcript.classList.toggle("can-fork", can.has("fork") && can.has("rewind"));
+    // Forking from a turn needs no going back: the host forks through that
+    // turn, and which turns it reaches its checkpoints say (`drawTurnActs`).
+    transcript.classList.toggle("can-fork", can.has("fork"));
     this.drawTurnActs();
   }
 
