@@ -628,6 +628,7 @@ pub async fn run_prepared(
     profile::session::start(&node);
     updates::start(&node);
     afoot::start(&node);
+    usage::watch(&node);
     forget::start(&node);
     let jobs_node = node.clone();
     tokio::spawn(async move {

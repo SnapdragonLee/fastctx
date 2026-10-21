@@ -1,9 +1,10 @@
+import type { UsageCallsQuery, UsageCallsPage } from "./usage-calls";
 // The way to the World from inside the shell: each function is one of the
 // shell's commands (`src-tauri/src/lib.rs`), which is one call of the
 // core's client. Outside the shell there is no World to reach, and
 // `inShell` says so.
 
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { HomeChange, WorldAgents } from "./agents";
 import type { ChangePreview, FolderChange, LoginChange, MachineLogins, WorldLogins } from "./logins";
@@ -11,7 +12,7 @@ import type { Control, Controlled, Offers } from "./control";
 import type { WorldSince } from "./since";
 import type { FileRange } from "./file-read";
 import type { HeldRead } from "./reads";
-import type { Attachment, UploadTarget } from "./attachments";
+import type { Attachment, SentUploadTarget, UploadTarget } from "./attachments";
 import type { ConnectionState } from "./device";
 import type { Focus } from "./focus";
 import type { BytesRead, TextRead } from "../app/reader";
@@ -24,8 +25,14 @@ import type { MachineStats } from "./stats";
 import type { Looked, RemoteHub, RemoteKey, RemoteServer, RemoteStep } from "../app/remote-world";
 import type { JournalSummary, JournalView, LookedUp, MapView, NodesReply, ProjectRecord, Stamp, TownSummary, WorldWho } from "./world";
 
+/** A development build asked for its specimen (`?specimen`) draws it even
+ *  inside the app's shell, so a phone's own WebView can be tried with real
+ *  fingers; a release build has no such door. */
+const specimenAsked = import.meta.env.DEV && new URLSearchParams(location.search).has("specimen");
+
+/** Whether the page runs in the app's shell, with the World behind it. */
 export function inShell(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return "__TAURI_INTERNALS__" in window && !specimenAsked;
 }
 
 /** In the shell on a computer, where this machine can be set up; a phone
@@ -182,9 +189,6 @@ export function keptForget(address: Address): Promise<void> {
   return invoke("kept_forget", { address });
 }
 
-/** The user's words to a resident, with the files uploaded for them;
- *  those other than images go to `filesOn` when the user chose a machine
- *  (an agent assisting them works on none of its own). */
 /** Why words were not said: `again` when no answer came, so saying them
  *  again under the same id is how they go on. */
 export interface NotSaid {
@@ -213,21 +217,21 @@ export function retryNow(): Promise<void> {
   return invoke("reconnect");
 }
 
-/** Carries a file on this computer to a machine, for an agent there or
- *  one about to be asked in; `sent` hears how many bytes have gone. */
+/** Stores a file on this computer and registers its location with the conversation. */
 export function uploadPath(machine: MachineName, target: UploadTarget, path: string, sent: (bytes: number) => void): Promise<Attachment> {
   const pieces = new Channel<number>();
   pieces.onmessage = sent;
-  return invoke("upload_path", { target, machineName: machine, path, sent: pieces });
+  const upload: SentUploadTarget = { kind: "sent", machine, target, operation: crypto.randomUUID() };
+  return invoke("upload_path", { target: upload, machineName: machine, path, sent: pieces });
 }
 
-/** Carries bytes the page holds (a pasted picture) to a machine. They go
- *  as the call's body; where and what as headers. */
+/** Keeps pasted bytes on this computer, or at the conversation's home on a phone. */
 export async function uploadBytes(machine: MachineName, target: UploadTarget, file: File): Promise<Attachment> {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  const upload: SentUploadTarget = { kind: "sent", machine, target, operation: crypto.randomUUID() };
   return invoke("upload_bytes", bytes, {
     headers: {
-      target: encodeURIComponent(JSON.stringify(target)),
+      target: encodeURIComponent(JSON.stringify(upload)),
       machine: encodeURIComponent(machine),
       name: encodeURIComponent(file.name),
       type: encodeURIComponent(file.type),
@@ -395,6 +399,11 @@ export function setAgentTitle(machine: MachineName, agent: string, dir: string, 
  *  see it. */
 export function agentUsage(machine: MachineName, agent: string, dir: string): Promise<UsageReport> {
   return invoke("agent_usage", { machineName: machine, agentName: agent, dir });
+}
+
+/** Request records, already filtered and redacted by the login's machine. */
+export function agentCalls(machine: MachineName, agent: string, dir: string, query: UsageCallsQuery = {}): Promise<UsageCallsPage> {
+  return invoke("agent_calls", { machineName: machine, agentName: agent, dir, query });
 }
 
 /** Residents or jobs in detail, from every machine that has them. */
@@ -687,7 +696,7 @@ export function agentActivity(address: Address, agent: string): Promise<AgentAct
 
 /** Whether this interface runs in the Android shell, which reads QR codes
  *  with the camera. */
-export const canScan = (): boolean => isTauri() && /Android/i.test(navigator.userAgent);
+export const canScan = (): boolean => inShell() && /Android/i.test(navigator.userAgent);
 
 /** Reads a login token's QR code with the phone's camera; null when the
  *  person turned back. */

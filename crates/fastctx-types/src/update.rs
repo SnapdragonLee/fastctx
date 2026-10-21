@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::MachineName;
 
+mod view;
+pub use view::*;
+
+mod status;
+pub use status::*;
+
+/// The first release accepting selected versions and remote update settings.
+pub const ASKED_SINCE: &str = "1.0.1-beta.3";
+
 /// The repository whose releases are Fastctx's.
 pub const REPOSITORY: &str = "yc-duan/fastctx";
 
@@ -198,6 +207,32 @@ pub struct Report {
     /// Reports a fetch's progress and stops it when the hub cancels it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub package_progress: bool,
+    #[serde(default)]
+    pub stage: Stage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    #[serde(default)]
+    pub auto_chosen: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_failure: Option<CheckFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<Timestamp>,
+    #[serde(default)]
+    pub checking: bool,
+    #[serde(default)]
+    pub updates_view: bool,
+}
+
+impl Report {
+    /// A failed check still describes reachability until a later connection succeeds.
+    pub fn needs_network(&self) -> bool {
+        self.github == Some(false)
+            && self.checked_at.is_none_or(|at| self.github_at.is_none_or(|reached| reached <= at))
+    }
 }
 
 /// The versions a machine of the network runs; for one away, what it ran
@@ -268,6 +303,10 @@ pub struct Due {
     /// Who asked for it, and when.
     pub by: crate::AccountName,
     pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<Manifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<Problem>,
 }
 
 /// An update someone asked of a machine from elsewhere, which it made: told
@@ -299,6 +338,8 @@ pub struct Network {
     pub hub: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub due: BTreeMap<MachineName, Due>,
+    #[serde(default)]
+    pub updates_view: bool,
 }
 
 impl Network {
@@ -342,8 +383,8 @@ pub struct Settings {
     /// kind's default (`Settings::auto_for`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
-    /// What 1.0.1 beta 1 and 2 kept of test releases; read no more.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What 1.0.1 beta 1 and 2 kept of test releases; accepted but never written.
+    #[serde(default, skip_serializing)]
     pub beta: Option<bool>,
     /// Fetches packages for the network's machines that cannot reach GitHub.
     #[serde(default = "yes")]
@@ -361,7 +402,8 @@ impl Default for Settings {
 }
 
 /// What kind of device takes updates, for its default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// A computer with the application: someone sits at it.
     App,
@@ -369,9 +411,23 @@ pub enum Kind {
     Headless,
     /// A managed machine, which follows its network.
     Managed,
+    #[serde(other)]
+    Phone,
 }
 
 impl Settings {
+    /// Changes only the choices explicitly supplied by the owner.
+    pub fn with_preferences(mut self, auto: Option<bool>, relays: Option<bool>) -> Self {
+        if let Some(auto) = auto {
+            self.auto = auto;
+            self.chosen = true;
+        }
+        if let Some(relays) = relays {
+            self.relays = relays;
+        }
+        self
+    }
+
     /// Whether a device of `kind` takes new releases by itself, under the
     /// network's `policy`: a managed machine as its network says; another as
     /// its owner chose, or by default, a computer with the application not,
@@ -380,7 +436,7 @@ impl Settings {
         match kind {
             Kind::Managed => policy.is_none_or(|policy| policy.managed_auto),
             _ if self.chosen => self.auto,
-            Kind::App => false,
+            Kind::App | Kind::Phone => false,
             Kind::Headless => true,
         }
     }
@@ -423,6 +479,16 @@ pub struct Looked {
     /// the size of each package.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub newer: Vec<Manifest>,
+    #[serde(default)]
+    pub checking: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CheckFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<Timestamp>,
+    #[serde(default)]
+    pub failures: u32,
 }
 
 impl Looked {
@@ -460,6 +526,8 @@ pub struct Failed {
     pub version: String,
     pub target: String,
     pub why: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<FailureReason>,
 }
 
 /// A package this machine holds, checked, and where.
@@ -487,9 +555,8 @@ pub struct State {
     /// The release its owner chose to update to, when it is not the newest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chosen: Option<Manifest>,
-    /// The newest major version the hubs it is on run: a release past it is
-    /// not taken by itself, lest it no longer reach them. None outside any
-    /// network, or where a hub does not say, or on the hub's own machine.
+    /// The oldest major version among its hubs; an unknown hub uses the
+    /// current kernel's major. None outside a network or on a hub's own machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_major: Option<u64>,
     pub looked: Looked,
@@ -500,6 +567,16 @@ pub struct State {
     /// The newest release on its channel, from GitHub or the network.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offer: Option<Manifest>,
+    /// The selected or newest newer release carrying this device's package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<Manifest>,
+    /// The newest compatible candidate within the hubs' major version,
+    /// independent of whether automatic updates are enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic: Option<String>,
+    /// The offered compatible release exceeds the automatic major-version limit.
+    #[serde(default)]
+    pub above_hub: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetching: Option<Fetching>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -524,6 +601,14 @@ pub struct State {
     /// Whether an interface on this machine is open now.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub open: bool,
+    #[serde(default)]
+    pub stage: Stage,
+    /// This node accepts local installation-stage reports.
+    #[serde(default)]
+    pub progress: bool,
+    /// Accepts atomic partial preference changes.
+    #[serde(default)]
+    pub preferences: bool,
 }
 
 /// A change of this machine's World program, as it goes.
@@ -540,6 +625,15 @@ pub struct Renewing {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "do")]
 pub enum UpdateCall {
+    /// Changes only the choices named, leaving other choices intact.
+    Preferences {
+        auto: Option<bool>,
+        relays: Option<bool>,
+    },
+    /// An interface reports its installation stage; only local interfaces may.
+    Progress {
+        stage: Stage,
+    },
     State,
     /// Look on GitHub now.
     Look,

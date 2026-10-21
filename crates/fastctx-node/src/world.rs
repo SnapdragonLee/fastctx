@@ -859,7 +859,8 @@ impl fastctx_net::link::Node for Handler {
                 | RemoteCall::PreviewAgentChange { .. }
                 | RemoteCall::ChangeAgentLogin { .. }
                 | RemoteCall::ReadAgentLimits { .. }
-                | RemoteCall::AgentUsage { .. }) => {
+                | RemoteCall::AgentUsage { .. }
+                | RemoteCall::AgentCalls { .. }) => {
                     crate::logins::remote::answer(&node, &link.view(), &asker, call).await
                 }
                 RemoteCall::Folders { path } => {
@@ -992,7 +993,8 @@ impl fastctx_net::link::Node for Handler {
                         RemoteCall::Updates { update } => Some(update),
                         _ => None,
                     };
-                    let asker = crate::updates::Asker { by: caller.account.clone(), hub: hub.clone() };
+                    let asker =
+                        crate::updates::Asker { by: caller.account.clone(), hub: hub.clone(), scheduled_at: None };
                     crate::updates::remote(&node, asker, update)
                         .await
                         .map(|state| RemoteReply::Update(Box::new(state)))
@@ -1022,6 +1024,16 @@ impl fastctx_net::link::Node for Handler {
                     crate::copy::receive(&node, to, manifest_bytes, manifest_sha256, resumes, stream)
                         .await
                         .map(RemoteReply::Copied)
+                }
+                RemoteCall::ReserveAttachment { target, file, operation, composer } => {
+                    crate::attachments::sent::reserve(&node, &from, &from, target, file, operation, composer)
+                        .await
+                        .map(RemoteReply::Uploaded)
+                }
+                RemoteCall::CommitAttachment { attachment, preview } => {
+                    crate::attachments::sent::commit(&node, &from, attachment, preview)
+                        .await
+                        .map(crate::attachments::remote_reply)
                 }
                 RemoteCall::Place { resident, attachment } => {
                     let stream = stream
@@ -1267,6 +1279,13 @@ impl fastctx_net::link::Node for Handler {
         }
     }
 
+    fn retain_package(&self, version: &str) -> Box<dyn Send + Sync> {
+        match self.node.upgrade() {
+            Some(node) => Box::new(crate::updates::retain_package(&node, version)),
+            None => Box::new(()),
+        }
+    }
+
     fn relay(
         &self,
         fetch: fastctx_types::update::Fetch,
@@ -1316,12 +1335,12 @@ impl fastctx_net::link::Node for Handler {
 pub fn grouped_machines(
     node: &Node,
     acting: &Acting,
+    here_too: bool,
 ) -> (MachineName, Vec<String>, Vec<fastctx_types::world::MachineGroup>) {
     let here = node.machine();
     let mut others: Vec<String> = Vec::new();
     let mut groups: Vec<fastctx_types::world::MachineGroup> = Vec::new();
     let mut keys = Vec::new();
-    let here_too = node.works_here(acting).is_ok();
     for link in node.links() {
         let view = link.view();
         let accounts = node.accounts_on(&link, acting);

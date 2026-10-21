@@ -97,6 +97,19 @@ pub(crate) async fn update_set(shell: tauri::State<'_, Shell>, settings: Setting
     ask(&shell, UpdateCall::Set { settings }).await
 }
 
+/// Reports the local interface's waiting or installation activity. Idle clears it.
+#[fastctx_gui_command::command]
+pub(crate) async fn update_progress(
+    shell: tauri::State<'_, Shell>,
+    stage: fastctx_types::update::Stage,
+) -> Result<State, String> {
+    let current = ask(&shell, UpdateCall::State).await?;
+    if !current.progress {
+        return Err("this World program does not accept update activity reports".into());
+    }
+    once(&shell, UpdateCall::Progress { stage }).await
+}
+
 /// Brings this application's package of `version` here.
 #[fastctx_gui_command::command]
 pub(crate) async fn update_fetch(shell: tauri::State<'_, Shell>, version: String) -> Result<State, String> {
@@ -108,6 +121,22 @@ pub(crate) async fn update_fetch(shell: tauri::State<'_, Shell>, version: String
 #[fastctx_gui_command::command]
 pub(crate) async fn update_choose(shell: tauri::State<'_, Shell>, version: Option<String>) -> Result<State, String> {
     ask(&shell, UpdateCall::Choose { version }).await
+}
+
+/// Reads or changes the account's update view on its hub.
+#[fastctx_gui_command::command]
+pub(crate) async fn network_updates(
+    shell: tauri::State<'_, Shell>,
+    hub: String,
+    account: String,
+    request: fastctx_types::update::ViewCall,
+) -> Result<fastctx_types::update::ViewReply, String> {
+    let hub = hub.parse::<fastctx_types::HubName>().map_err(|e| e.to_string())?;
+    let account = account.parse::<fastctx_types::AccountName>().map_err(|e| e.to_string())?;
+    match shell.world().call(Call::NetworkUpdates { hub, account, request }).await.map_err(|e| e.to_string())?.0 {
+        Reply::NetworkUpdates(reply) => Ok(reply),
+        other => Err(format!("the World answered {other:?}")),
+    }
 }
 
 /// Has `machine_name` update its World program itself.
@@ -126,11 +155,32 @@ pub(crate) async fn update_machine(shell: tauri::State<'_, Shell>, machine_name:
 pub(crate) async fn machine_updates(
     shell: tauri::State<'_, Shell>,
     machine_name: String,
-    update: UpdateCall,
+    mut update: UpdateCall,
 ) -> Result<State, String> {
     let machine = fastctx_types::MachineName::try_from(machine_name).map_err(|error| error.to_string())?;
-    if matches!(update, UpdateCall::App { .. } | UpdateCall::Fetch { .. }) {
+    if matches!(update, UpdateCall::App { .. } | UpdateCall::Fetch { .. } | UpdateCall::Progress { .. }) {
         return Err("only an interface on that machine says what it is or brings packages there".to_string());
+    }
+    if let UpdateCall::Preferences { auto, relays } = update {
+        let local = once(&shell, UpdateCall::State).await?;
+        update = if local.preferences {
+            UpdateCall::Preferences { auto, relays }
+        } else {
+            if local.running.as_deref().and_then(fastctx_types::update::release)
+                < fastctx_types::update::release(fastctx_types::update::ASKED_SINCE)
+            {
+                return Err("update the World program on this device before changing remote update settings".into());
+            }
+            let (reply, _) = shell
+                .world()
+                .call(Call::MachineUpdates { machine: machine.clone(), update: UpdateCall::State })
+                .await
+                .map_err(|e| e.to_string())?;
+            let Reply::Update(current) = reply else {
+                return Err("the machine did not report its update settings".into());
+            };
+            UpdateCall::Set { settings: current.settings.with_preferences(auto, relays) }
+        };
     }
     match shell.world().call(Call::MachineUpdates { machine, update }).await.map_err(|error| error.to_string())?.0 {
         Reply::Update(state) => Ok(*state),
@@ -148,17 +198,35 @@ pub(crate) async fn update_install(
     shell: tauri::State<'_, Shell>,
     version: String,
 ) -> Result<bool, String> {
-    let state = ask(&shell, UpdateCall::State).await?;
+    let mut state = ask(&shell, UpdateCall::State).await?;
+    if state.preferences
+        && !state
+            .offer
+            .iter()
+            .chain(state.chosen.iter())
+            .chain(state.looked.newer.iter())
+            .any(|manifest| manifest.version == version)
+    {
+        state = ask(&shell, UpdateCall::Choose { version: Some(version.clone()) }).await?;
+    }
     let target = target();
     let kept = state
         .kept
         .iter()
         .find(|kept| kept.version == version && kept.target == target)
         .ok_or("the new version is not here yet")?;
+    if state.progress {
+        once(
+            &shell,
+            UpdateCall::Progress { stage: fastctx_types::update::Stage::Installing { version: version.clone() } },
+        )
+        .await?;
+    }
     #[cfg(target_os = "android")]
     {
-        let _ = state;
-        crate::android::install_package(&app, kept.path.clone()).await
+        let installed = crate::android::install_package(&app, kept.path.clone()).await;
+        installation_outcome(&shell, &state, &version, &installed).await;
+        installed
     }
     #[cfg(desktop)]
     {
@@ -173,9 +241,24 @@ pub(crate) async fn update_install(
             .find(|manifest| manifest.version == version)
             .ok_or("the new version's manifest is not known here")?;
         let package = manifest.package(&target).ok_or("the new version has no package for this computer")?;
-        desktop::install(&app, &version, &target, package, std::path::Path::new(&kept.path)).await?;
-        Ok(true)
+        let installed =
+            desktop::install(&app, &version, &target, package, std::path::Path::new(&kept.path)).await.map(|()| true);
+        installation_outcome(&shell, &state, &version, &installed).await;
+        installed
     }
+}
+
+async fn installation_outcome(shell: &Shell, state: &State, version: &str, outcome: &Result<bool, String>) {
+    if !state.progress {
+        return;
+    }
+    use fastctx_types::update::{FailureReason, Problem, Stage};
+    let stage = match outcome {
+        Err(why) => Stage::Failed { version: version.into(), problem: Problem::new(FailureReason::Other, why.clone()) },
+        Ok(false) => Stage::Ready { version: version.into() },
+        Ok(true) => return,
+    };
+    let _ = once(shell, UpdateCall::Progress { stage }).await;
 }
 
 /// After a computer's update, the World program the new application carries

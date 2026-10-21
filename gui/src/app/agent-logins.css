@@ -321,12 +321,6 @@
   color: var(--text-3);
 }
 
-.logins-row-about {
-  margin-right: 3px;
-  font-size: var(--size-text);
-  color: var(--text-3);
-}
-
 .logins-row-small {
   font-size: var(--size-text);
   color: var(--text-3);
@@ -739,6 +733,13 @@
   overflow: hidden;
 }
 
+/* On a phone it rises edge to edge, as every sheet there. */
+@media (max-width: 760px) {
+  .agent-change-sheet .sheet-body {
+    width: 100%;
+  }
+}
+
 .agent-change {
   flex: 1 1 auto;
   min-height: 0;
@@ -944,9 +945,17 @@
 
 /* On a phone the head keeps its row: the programs stay a hover on a
    wider screen, and scanning again is its mark alone. */
+/* A phone's head: the machine chosen by its name alone. */
 @media (max-width: 560px) {
-  .logins-machine-state .logins-programs {
+  .logins-machine-state .logins-programs,
+  .agents-pick-sub,
+  .agents-pick-icon {
     display: none;
+  }
+
+  .agents-pick {
+    gap: 4px;
+    padding: 0 6px 0 10px;
   }
 
   .logins-rescan span {

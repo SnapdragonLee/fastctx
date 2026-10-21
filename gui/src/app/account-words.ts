@@ -826,7 +826,7 @@ export const zhMachines: MachinesWords = {
   remove: "移除",
   assistShort: (owner) => `来自 ${owner}`,
   assistantNote: "在你的机器上工作",
-  assistantSaid: (owner) => `${owner} 的智能体在协助你；它在你的机器上工作，不接触 ${owner} 的这台电脑`,
+  assistantSaid: (owner) => `${owner} 的智能体在协助你`,
   assistantGone: "该登录已不可用",
   talk: "新对话",
   film: {
@@ -1141,7 +1141,7 @@ export const enMachines: MachinesWords = {
   remove: "Remove",
   assistShort: (owner) => `from ${owner}`,
   assistantNote: "Works on your machines",
-  assistantSaid: (owner) => `${owner}'s agent assisting you; it works on your machines and never touches ${owner}'s computer`,
+  assistantSaid: (owner) => `${owner}'s agent is assisting you`,
   assistantGone: "Login unavailable",
   talk: "New conversation",
   film: {
@@ -1406,6 +1406,10 @@ export interface AccessWords {
   weeklyNone: string;
   weeklyOf(amount: string): string;
   weeklyBad: string;
+  /** The Fable limit that comes with a weekly one, half of it, under the
+   *  weekly field. */
+  fableOf(amount: string): string;
+  fableHint: string;
   daily: string;
   dailyHint: string;
   dailyOf(amount: string): string;
@@ -1450,7 +1454,7 @@ export const zhAccess: AccessWords = {
   sharedTo: "已共享给",
   shareGo: "共享",
   assistTitle: (login, machine) => `让 ${machine} 上的 ${login} 协助他人`,
-  assistWhat: "只用这个登录协助对方，不共享机器；它在对方的机器上为对方工作。",
+  assistWhat: "只用这个登录协助对方，不共享机器。它能读写这台电脑上你的所有文件。",
   assistSees: "会使用这个登录的订阅额度，运行过程在你的机器上可见、可停止。",
   assisting: "正在协助",
   assistGo: "协助",
@@ -1464,6 +1468,8 @@ export const zhAccess: AccessWords = {
   weeklyHint: "约 $ 按 API 标价折算；到了就停，和这个登录的 7 天额度一起重置。空着是不限。",
   weeklyNone: "不限",
   weeklyOf: (amount) => `每周 约 ${amount}`,
+  fableOf: (amount) => `其中 Fable 至多 ${amount}`,
+  fableHint: "Fable 的上限自动是每周上限的一半，不能另填。",
   weeklyBad: "每周上限要填一个大于 0 的金额",
   daily: "每天上限",
   dailyHint: "约 $ 按 API 标价折算；按最近 24 小时算，到了就停。空着是不限。",
@@ -1504,7 +1510,7 @@ export const enAccess: AccessWords = {
   sharedTo: "Shared with",
   shareGo: "Share",
   assistTitle: (login, machine) => `Let ${login} on ${machine} assist others`,
-  assistWhat: "Only this login assists them, not the machine; it works for them on their machines.",
+  assistWhat: "Only this login assists them, not the machine. It can read and change all your files on this computer.",
   assistSees: "It uses this login's subscription. You can see and stop it on your machine.",
   assisting: "Assisting",
   assistGo: "Assist",
@@ -1518,6 +1524,8 @@ export const enAccess: AccessWords = {
   weeklyHint: "Dollars at the API's list prices; reaching it stops them until this login's 7-day limit resets. Empty is no limit.",
   weeklyNone: "No limit",
   weeklyOf: (amount) => `≈ ${amount} a week`,
+  fableOf: (amount) => `Fable: up to ${amount} of it`,
+  fableHint: "Fable gets half the weekly limit, set for you.",
   weeklyBad: "The weekly limit needs an amount above 0",
   daily: "Daily limit",
   dailyHint: "Dollars at the API's list prices over the last 24 hours; reaching it stops them. Empty is no limit.",

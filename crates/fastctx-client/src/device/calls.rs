@@ -23,11 +23,53 @@ impl Device {
         Box::pin(self.call_inner(call)).await
     }
 
-    async fn call_inner(self: &Arc<Self>, call: Call) -> Result<(Reply, MachineName), Error> {
+    async fn call_inner(self: &Arc<Self>, mut call: Call) -> Result<(Reply, MachineName), Error> {
+        if let Call::MachineUpdates { machine, update } = &call
+            && matches!(
+                update,
+                fastctx_types::update::UpdateCall::App { .. }
+                    | fastctx_types::update::UpdateCall::Fetch { .. }
+                    | fastctx_types::update::UpdateCall::Progress { .. }
+            )
+        {
+            return Err(failed(format!("only an interface on {machine} says what it is or brings packages there")));
+        }
+        let preferences = match &call {
+            Call::MachineUpdates {
+                machine,
+                update: fastctx_types::update::UpdateCall::Preferences { auto, relays },
+            } => Some((machine.clone(), *auto, *relays)),
+            _ => None,
+        };
+        if let Some((machine, auto, relays)) = preferences {
+            let running = self.sessions().iter().find_map(|session| {
+                session.link.versions().and_then(|n| n.machines.get(&machine).map(|m| m.kernel.clone()))
+            });
+            if running.as_deref().and_then(fastctx_types::update::release)
+                < fastctx_types::update::release(fastctx_types::update::ASKED_SINCE)
+            {
+                return Err(failed("this machine has not reported support for remote update settings"));
+            }
+            let (reply, _) = self
+                .call(Call::MachineUpdates {
+                    machine: machine.clone(),
+                    update: fastctx_types::update::UpdateCall::State,
+                })
+                .await?;
+            let Reply::Update(current) = reply else {
+                return Err(failed("the machine did not report its update settings"));
+            };
+            let update = if current.preferences {
+                fastctx_types::update::UpdateCall::Preferences { auto, relays }
+            } else {
+                fastctx_types::update::UpdateCall::Set { settings: current.settings.with_preferences(auto, relays) }
+            };
+            call = Call::MachineUpdates { machine, update };
+        }
         let here = || self.state().name.unwrap_or_else(|| MachineName::try_from("device").expect("a valid name"));
         match call {
             Call::AttachmentThumbnail { attachment, max } => {
-                let machine = attachment.owner().machine.clone();
+                let machine = attachment.thumbnail_owner().machine.clone();
                 return Ok((Reply::Thumbnail(self.thumbnail_attachment(attachment, max).await?), machine));
             }
             Call::Login { hub, account, password, name, .. } => {
@@ -79,6 +121,11 @@ impl Device {
                 let account = account.ok_or_else(|| failed(NO_OWN_COLLAB))?;
                 let session = self.on_hub(hub.as_ref())?;
                 return Ok((Reply::CollabRead(session.link.collab_read(&account).map_err(failed)?), here()));
+            }
+            Call::NetworkUpdates { hub, account, request } => {
+                let session = self.on_hub(Some(&hub))?;
+                let reply = session.link.network_updates(&account, request).await.map_err(failed)?;
+                return Ok((Reply::NetworkUpdates(reply), here()));
             }
             Call::MachineLog { hub, account, before } => {
                 let session = self.on_hub(Some(&hub))?;
@@ -169,6 +216,9 @@ impl Device {
             }
             Call::ChangeAgentLogin { machine, agent, dir, into, raise_output_limit, take_back } => {
                 (machine, RemoteCall::ChangeAgentLogin { agent, dir, into, raise_output_limit, take_back }, None)
+            }
+            Call::AgentCalls { machine, agent, dir, query } => {
+                (machine, RemoteCall::AgentCalls { agent, dir, query }, None)
             }
             Call::AgentUsage { machine, agent, dir } => (machine, RemoteCall::AgentUsage { agent, dir }, None),
             Call::ReadAgentLimits { machine, agent, dir } => {
@@ -297,6 +347,7 @@ impl Device {
             (RemoteCall::AttachmentThumbnail { .. }, RemoteReply::Thumbnail(reply)) => Reply::Thumbnail(reply),
             (RemoteCall::Lines { .. }, RemoteReply::Lines(reply)) => Reply::Lines(reply),
             (RemoteCall::Homes { .. }, RemoteReply::Set) => Reply::Done,
+            (RemoteCall::AgentCalls { .. }, RemoteReply::AgentCalls(page)) => Reply::AgentCalls(page),
             (RemoteCall::AgentUsage { .. }, RemoteReply::AgentUsage(report)) => Reply::AgentUsage(report),
             (
                 RemoteCall::ScanAgents { .. }

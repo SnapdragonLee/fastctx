@@ -20,7 +20,10 @@
 pub(crate) mod calls;
 pub(crate) mod control;
 mod fork;
+mod fork_attachments;
 mod fork_history;
+mod fork_ready;
+mod fork_source;
 pub(crate) mod garbage;
 pub(crate) mod history;
 mod image_records;
@@ -28,6 +31,7 @@ pub(crate) use image_records::paths as image_records;
 mod image_flush;
 pub(crate) use image_flush::wait_for_image;
 pub mod management;
+mod oldest;
 pub(crate) mod pairing;
 mod plugin_check;
 mod process;
@@ -69,6 +73,8 @@ pub struct Claude {
     /// The user's words handed to each resident's session as the user's,
     /// until Claude Code reports keeping them (`said_by_world`).
     handed: Mutex<HashMap<ResidentId, Vec<String>>>,
+    /// The Claude Code last found new enough to start sessions in.
+    checked: oldest::Checked,
 }
 
 struct State {
@@ -107,6 +113,7 @@ impl Claude {
             startup_listings: Default::default(),
             changed: Default::default(),
             handed: Default::default(),
+            checked: Default::default(),
         })
     }
 
@@ -242,19 +249,19 @@ pub async fn replay(node: &Arc<Node>) {
 }
 
 pub(crate) fn recover_startups(node: &Arc<Node>) {
+    fork_ready::recover(node);
     startup::recover(node);
 }
 
 /// Publishes what the session's mod waits for before its system prompt and
-/// its first model request: whether it assists another account, and its
-/// model and effort.
+/// its first model request: its model and effort.
 /// It is published as soon as the session is identified, transcript or not:
 /// Claude Code may build the system prompt before the session-start hook
 /// that reports where the transcript is, so waiting for that would hold the
 /// first turn forever. The context fields come from the transcript when one
 /// is known; the mod's rewind and fork read the transcript themselves.
 fn policy(node: &Node, resident: &ResidentId, directory: &Path) -> std::io::Result<()> {
-    let (about, _) = node.residents.about(resident).ok_or_else(|| std::io::Error::other("unknown Claude resident"))?;
+    node.residents.about(resident).ok_or_else(|| std::io::Error::other("unknown Claude resident"))?;
     let options = crate::session_options::read(node, resident).map_err(|error| std::io::Error::other(error.message))?;
     let path = directory.join("policy.json");
     let registration =
@@ -285,7 +292,7 @@ fn policy(node: &Node, resident: &ResidentId, directory: &Path) -> std::io::Resu
             }
         }
     }
-    let value = serde_json::json!({"instance": registration.instance, "assisting": node.works_here(&about.acting).is_err(), "model": options.model,
+    let value = serde_json::json!({"instance": registration.instance, "model": options.model,
         "effort": options.reasoning_effort, "last_uuid": last_uuid, "context_uuids":context_uuids, "context_tail":context_tail});
     let bytes = serde_json::to_vec(&value).map_err(std::io::Error::other)?;
     fastctx_platform::publish(&path, &bytes, fastctx_platform::Permissions::Private)
@@ -1072,6 +1079,11 @@ pub async fn deliver(
 ) -> Option<Result<Landed, Failure>> {
     let delivering = node.claude.delivering.get_or_insert_with(to, || crate::ranked::delivering(to));
     let _delivering = delivering.lock().await;
+    match fork_ready::pending(node, to) {
+        Ok(Some(why)) => return Some(Ok(Landed::Waiting { why: Some(why), answered: true })),
+        Err(error) => return Some(Err(error)),
+        Ok(None) => {}
+    }
     let session: String = node.claude.state.lock().expect("never poisoned").paired.get(to)?;
     if let Err(error) = crate::inbox::target(directory, &pending.delivery.id, &session) {
         return Some(Err(Failure::new(error.to_string())));
@@ -1182,6 +1194,9 @@ fn into_inbox(
     directory: &ConversationDir,
     pending: &Pending,
 ) -> Result<Landed, Failure> {
+    if let Some(why) = fork_ready::pending(node, resident)? {
+        return Ok(Landed::Waiting { why: Some(why), answered: true });
+    }
     let taking = node.taking.lock().expect("never poisoned");
     if taking.iter().any(|(_, id)| *id == pending.delivery.id) {
         return Ok(Landed::Waiting {
@@ -1268,7 +1283,9 @@ async fn wake(
     words: String,
     id: fastctx_types::NoticeId,
 ) -> Result<Landed, Failure> {
-    let Command { program, cwd, env } = command(node, home)?;
+    let launching = command(node, home)?;
+    oldest::check(node, &launching).await?;
+    let Command { program, cwd, env } = launching;
     if let Some(resident) = node.residents.resident_of_thread(session) {
         crate::profile::session::claude(node, &resident, false)?;
     }
@@ -1344,10 +1361,13 @@ pub async fn open_here(
     if let Some(town) = &town {
         crate::town::project::spans_here(node, town).await?;
     }
+    // Nothing of the conversation is made for a Claude Code that cannot
+    // run it.
+    let launching = command(node, opened.home.as_deref())?;
+    oldest::check(node, &launching).await?;
     let agent = AgentName::try_from("claude").expect("a valid agent name");
     let (id, _opening) = crate::attachments::opening(node, &agent, town.as_ref(), &attachments).await?;
     let _birth = crate::here::born(node, &id, opened.acting.clone());
-    let launching = command(node, opened.home.as_deref())?;
     let Command { program, env, .. } = launching.clone();
     // A login assisting another account starts without the browser of this
     // machine (`background::Start::assisting`).
@@ -1516,10 +1536,11 @@ pub(crate) fn untrust(directory: &Path, home: Option<&Path>) -> Result<(), Strin
 /// `id`: the host's limit on a tool answer opened past the World's own
 /// (`world-view.md`, 一次给多少), its limit on a tool's description opened so
 /// the whole of `run` reaches the model, the host's own shell, file and search tools
-/// turned off, since the World's take their place, and the conversation,
-/// which its plugin reads back from them when it starts. The session runs
-/// without approvals (`background::settings_args`), so nothing else needs
-/// allowing.
+/// turned off, since the World's take their place, the session working in
+/// place rather than in a worktree of its own directory, which no repository
+/// it edits on any machine lives in, and the conversation, which its plugin
+/// reads back from them when it starts. The session runs without approvals
+/// (`background::settings_args`), so nothing else needs allowing.
 pub(crate) fn settings_json(id: &ResidentId) -> String {
     let mut settings = serde_json::json!({
         "env": {
@@ -1530,6 +1551,7 @@ pub(crate) fn settings_json(id: &ResidentId) -> String {
         "permissions": {
             "deny": ["Bash", "PowerShell", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob"],
         },
+        "worktree": { "bgIsolation": "none" },
     });
     // Claude Code lets root skip approvals only in a sandbox declared as
     // one: where the World's conversations run as root, they are declared

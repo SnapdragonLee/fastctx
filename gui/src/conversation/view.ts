@@ -34,6 +34,7 @@ import { fillStep, stepKey, stepRowHtml, stepRowText, type StepItem } from "./tr
 import { diffCard, unifiedDiff, type DiffCard, type DiffKind } from "./diff-card";
 import { handOnAtEdge } from "../scroll-handoff";
 import { ActsMenu } from "../app/acts-menu";
+import { onHeld } from "../app/press";
 import type { AgentActivity, Content, Health, MachineName, Notice, Speaker, Tool, TurnEnd } from "../world/events";
 import type { Attachment } from "../world/attachments";
 import type { Decoding } from "../world/remote-lines";
@@ -54,7 +55,7 @@ import { DiffLines, RemoteDiff, diffPaint, keptDiff, memoryDiff } from "./diff-l
 import { headline, onlyWrites, tenseOf, writeHeadline } from "./tool";
 import { drawDiagrams } from "./diagrams";
 import { readTold, worldSaid, type WorldSaid } from "./told";
-import { allowanceOf, detailOf } from "../app/problem";
+import { allowanceOf, detailOf, heldOf } from "../app/problem";
 import { AnchorLayout, AnchoredHeight } from "../longview";
 import { FEW, LongText, type LongLines, type LongTextWords, type OtherSource } from "./long-text";
 import { Said, WholeOutput, outputPaint, type OpenedLines } from "./run-output";
@@ -115,6 +116,8 @@ export interface Context {
    *  same again, or to fork from `turn`; offered only where the
    *  conversation takes it. */
   turnAct?: ((act: "rewind" | "regenerate" | "fork", turn: string, words: string | null, kept: Attachment[]) => void) | undefined;
+  /** A turn's requests one by one, on the usage page of its login. */
+  turnCalls?: ((turn: string) => void) | undefined;
   /** Lines of a file or a job's output on the machine holding them, read a
    *  screen at a time: a write's change, a command's whole output. */
   lines?: ((machine: MachineName, path: string, decoding: Decoding) => Promise<OpenedLines>) | undefined;
@@ -185,6 +188,9 @@ interface Slot {
   prose?: StreamedProse;
   /** What is done to a message's turn, under its words. */
   acts?: HTMLElement;
+  /** The interface's own line, where the World's hold answered in the
+   *  model's place. */
+  held?: HTMLElement;
   stretch?: Stretch;
   findRevision?: number;
 }
@@ -322,15 +328,11 @@ export class ConversationView {
     });
     // On a touch screen every answer has its actions under it; the user's
     // own words have none shown, and held, their two float up beside them.
-    root.addEventListener("contextmenu", (event) => {
-      if (!this.own(event) || !matchMedia("(hover: none)").matches) return;
-      const target = event.target as HTMLElement;
-      const block = target.closest<HTMLElement>(".block");
-      const acts = block?.querySelector<HTMLElement>(".user-acts");
-      const bubble = block?.querySelector<HTMLElement>(".bubble");
-      if (!acts || !bubble || target.closest("a, button, input, textarea, pre")) return;
-      event.preventDefault();
-      this.heldMenu(bubble, acts);
+    onHeld(root, ".bubble", (bubble, event, input) => {
+      if (input !== "touch" || !this.own(event)) return false;
+      const acts = bubble.closest<HTMLElement>(".block")?.querySelector<HTMLElement>(".user-acts");
+      if (!acts || (event.target as HTMLElement).closest("a, button, pre")) return false;
+      return this.heldMenu(bubble, acts);
     });
     // Enter in an answer's field answers, as the card's first button would.
     root.addEventListener("keydown", (event) => {
@@ -994,7 +996,19 @@ export class ConversationView {
       slot.acts.className = "message-acts";
       slot.element.replaceChildren(slot.prose.element, slot.acts);
     }
-    slot.prose.update(entry.text, entry.writing);
+    // The hold's sentence is the World's, not the model's: said as the
+    // interface says an allowance reached, its words a hover away.
+    const held = entry.writing ? null : heldOf(entry.text);
+    slot.prose.element.hidden = !!held;
+    if (held) {
+      slot.held ??= slot.element.insertBefore(document.createElement("div"), slot.acts!);
+      const note = `<div class="note caution" title="${escape(entry.text)}">${escape(this.context.words.allowanceUsed(held))}</div>`;
+      if (slot.held.innerHTML !== note) slot.held.innerHTML = note;
+    } else {
+      slot.held?.remove();
+      delete slot.held;
+      slot.prose.update(entry.text, entry.writing);
+    }
     const acts = this.answerActs(entry);
     if (slot.acts!.innerHTML !== acts) slot.acts!.innerHTML = acts;
   }
@@ -1154,7 +1168,7 @@ export class ConversationView {
       info.length
         ? `<span class="turn-icon turn-info" tabindex="0" aria-label="${escape(info.map(({ label, text }) => `${label} ${text}`).join("; "))}">${glyph("info", 16)}<span class="turn-info-card" role="tooltip">${info
             .map(({ label, text, html }) => `<span class="turn-info-label">${escape(label)}</span><span>${html ?? escape(text)}</span>`)
-            .join("")}</span></span>`
+            .join("")}${this.context.turnCalls ? `<button class="turn-info-calls" type="button" data-turn-calls="${escape(entry.turn)}">${escape(words.turnInfo.requests)}</button>` : ""}</span></span>`
         : ""
     }</div>`;
   }
@@ -1248,10 +1262,10 @@ export class ConversationView {
    *  name: a press does what the mark beside the turn would. */
   /** The user's words held on a touch screen: their actions as a small
    *  menu beside them, each doing what its mark does. */
-  private heldMenu(bubble: HTMLElement, acts: HTMLElement): void {
+  private heldMenu(bubble: HTMLElement, acts: HTMLElement): boolean {
     const buttons = [...acts.querySelectorAll<HTMLButtonElement>("button.turn-icon")];
     const shown = buttons.filter((button) => !(button.dataset.needs && !this.root.classList.contains(`can-${button.dataset.needs}`)));
-    if (!shown.length) return;
+    if (!shown.length) return false;
     heldMenu.open(
       bubble,
       "",
@@ -1259,6 +1273,7 @@ export class ConversationView {
       (act) => shown[Number(act)]?.click(),
       true,
     );
+    return true;
   }
 
   /** The user chose in a card: an option is marked, an answer is sent. */
@@ -1423,9 +1438,9 @@ export class ConversationView {
       // A long message shows its first lines, the rest a press away.
       if (key && longWords(text)) {
         const open = this.unfolded.has(key);
-        return `${who}<div class="bubble long${open ? " open" : ""}${state}"><div class="bubble-text">${plain(text)}</div><button class="bubble-more" type="button" data-unfold="${escape(key)}" aria-expanded="${open}">${escape(open ? words.bubbleLess : words.bubbleMore)}</button></div>${note}`;
+        return `${who}<div class="bubble long${open ? " open" : ""}${state}" data-own-press><div class="bubble-text">${plain(text)}</div><button class="bubble-more" type="button" data-unfold="${escape(key)}" aria-expanded="${open}">${escape(open ? words.bubbleLess : words.bubbleMore)}</button></div>${note}`;
       }
-      return `${who}<div class="bubble${state}">${plain(text)}</div>${note}`;
+      return `${who}<div class="bubble${state}" data-own-press>${plain(text)}</div>${note}`;
     }
     // Words from another resident, or the World's own telling from a node
     // too old to say it as facts: never in the user's bubble. The head notes
@@ -2414,7 +2429,7 @@ export class ConversationView {
       return;
     }
     const target = (event.target as HTMLElement).closest<HTMLElement>(
-      "[data-open], [data-fold], [data-gap], [data-earlier], [data-asked], .code-copy, .ask-option, [data-ask], [data-copy], [data-copy-turn], [data-turn-act], [data-question-pick], [data-question-send], [data-question-skip], [data-question-change]",
+      "[data-open], [data-fold], [data-gap], [data-earlier], [data-asked], .code-copy, .ask-option, [data-ask], [data-copy], [data-copy-turn], [data-turn-act], [data-turn-calls], [data-question-pick], [data-question-send], [data-question-skip], [data-question-change]",
     );
     if (!target) return;
     if (target.dataset.asked !== undefined) {
@@ -2461,6 +2476,10 @@ export class ConversationView {
     }
     if (target.dataset.questionSend !== undefined || target.dataset.questionSkip !== undefined || target.dataset.questionChange !== undefined) {
       void this.answerQuestions(target);
+      return;
+    }
+    if (target.dataset.turnCalls) {
+      this.context.turnCalls?.(target.dataset.turnCalls);
       return;
     }
     if (target.dataset.turnAct) {

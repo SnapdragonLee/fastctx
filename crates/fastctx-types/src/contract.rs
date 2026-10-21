@@ -136,9 +136,12 @@ impl RemoteCall {
             | Self::PreviewAgentChange { .. }
             | Self::ReadAgentLimits { .. }
             | Self::AgentUsage { .. }
+            | Self::AgentCalls { .. }
             | Self::Offers { .. }
             | Self::Lines { request: Lines::Find { .. } } => Contract::ASKS_AGENT,
-            Self::Composer { .. }
+            Self::ReserveAttachment { .. }
+            | Self::CommitAttachment { .. }
+            | Self::Composer { .. }
             | Self::PageAction { .. }
             | Self::Relay { .. }
             | Self::Forget { .. }
@@ -159,6 +162,8 @@ impl RemoteCall {
                     UpdateCall::State
                     | UpdateCall::Look
                     | UpdateCall::Set { .. }
+                    | UpdateCall::Preferences { .. }
+                    | UpdateCall::Progress { .. }
                     | UpdateCall::App { .. }
                     | UpdateCall::Fetch { .. }
                     | UpdateCall::Choose { .. },
@@ -269,6 +274,7 @@ impl Call {
             | Self::PreviewAgentChange { .. }
             | Self::ReadAgentLimits { .. }
             | Self::AgentUsage { .. }
+            | Self::AgentCalls { .. }
             | Self::Look { .. }
             | Self::Watch { .. }
             | Self::Offers { .. }
@@ -329,6 +335,7 @@ impl Call {
             | Self::LoginWithToken { .. }
             | Self::OpenAccount { .. }
             | Self::Account { .. }
+            | Self::NetworkUpdates { .. }
             | Self::Accounts { .. }
             | Self::RenameHere { .. }
             | Self::HubProxy { .. }

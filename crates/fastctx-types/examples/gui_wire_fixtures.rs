@@ -38,8 +38,12 @@ mod session;
 mod since;
 #[path = "gui_wire_fixtures/stats.rs"]
 mod stats;
+#[path = "gui_wire_fixtures/updates.rs"]
+mod updates;
 #[path = "gui_wire_fixtures/usage.rs"]
 mod usage;
+#[path = "gui_wire_fixtures/usage_calls.rs"]
+mod usage_calls;
 #[path = "gui_wire_fixtures/world.rs"]
 mod world;
 
@@ -51,6 +55,7 @@ mod run_facts;
 
 #[derive(Serialize)]
 struct Fixtures {
+    updates: updates::Fixtures,
     profile: profile::Fixtures,
     machine_log: Vec<fastctx_types::machine_log::Page>,
     run_facts: run_facts::Fixtures,
@@ -72,10 +77,12 @@ struct Fixtures {
     renewal: renewal::Fixtures,
     stats: stats::Fixtures,
     usage: usage::Fixtures,
+    usage_calls: usage::Fixtures,
 }
 
 fn main() {
     let fixtures = Fixtures {
+        updates: updates::fixtures(),
         profile: profile::fixtures(),
         machine_log: machine_log::fixtures(),
         run_facts: run_facts::fixtures(),
@@ -97,6 +104,7 @@ fn main() {
         renewal: renewal::fixtures(),
         stats: stats::fixtures(),
         usage: usage::fixtures(),
+        usage_calls: usage_calls::fixtures(),
     };
     let mut out = io::stdout().lock();
     serde_json::to_writer_pretty(&mut out, &fixtures).expect("serialize GUI fixtures");

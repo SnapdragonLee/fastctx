@@ -1,4 +1,1044 @@
 {
+  "updates": {
+    "states": [
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "idle"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "unknown"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "fetching",
+          "version": "1.0.2",
+          "via": null,
+          "received": 0,
+          "total": null
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "fetching",
+          "version": "1.0.2",
+          "via": "github",
+          "received": 1,
+          "total": 1024
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "ready",
+          "version": "1.0.2"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "waiting_idle",
+          "version": "1.0.2"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "waiting_app",
+          "version": "1.0.2"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "installing",
+          "version": "1.0.2"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "administrator",
+          "version": "1.0.2"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "renewing",
+          "version": "1.0.2",
+          "phase": "returning_to_service"
+        },
+        "progress": true,
+        "preferences": true
+      },
+      {
+        "settings": {
+          "auto": false,
+          "relays": true
+        },
+        "channel": "stable",
+        "auto": false,
+        "looked": {
+          "at": "2026-10-20T12:00:00Z",
+          "checking": true,
+          "failure": {
+            "kind": "unreachable",
+            "reason": "dns"
+          },
+          "github_at": "2026-10-20T12:00:00Z",
+          "next": "2026-10-20T12:00:00Z",
+          "failures": 2
+        },
+        "network": {
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "due": {
+            "server": {
+              "version": "1.0.2",
+              "by": "owner",
+              "at": "2026-10-20T12:00:00Z",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": {
+                "reason": {
+                  "kind": "signature"
+                },
+                "why": "the package does not match its signature"
+              }
+            }
+          },
+          "updates_view": true
+        },
+        "available": {
+          "version": "1.0.2",
+          "notes": "An update.",
+          "pub_date": "2026-10-20T12:00:00Z",
+          "platforms": {}
+        },
+        "automatic": "1.0.2",
+        "above_hub": true,
+        "failed": {
+          "version": "1.0.2",
+          "target": "linux-x86_64-appimage",
+          "why": "disk full",
+          "reason": {
+            "kind": "disk"
+          }
+        },
+        "kernel_target": "",
+        "stage": {
+          "kind": "failed",
+          "version": "1.0.2",
+          "problem": {
+            "reason": {
+              "kind": "signature"
+            },
+            "why": "the package does not match its signature"
+          }
+        },
+        "progress": true,
+        "preferences": true
+      }
+    ],
+    "checks": [
+      {
+        "kind": "unreachable",
+        "reason": "dns"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "connect"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "tls"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "timeout"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "interrupted"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "proxy"
+      },
+      {
+        "kind": "unreachable",
+        "reason": "other"
+      },
+      {
+        "kind": "rate_limited",
+        "until": "2026-10-20T12:00:00Z"
+      },
+      {
+        "kind": "http",
+        "status": 503
+      },
+      {
+        "kind": "unreadable"
+      },
+      {
+        "kind": "other"
+      }
+    ],
+    "reasons": [
+      {
+        "kind": "no_package"
+      },
+      {
+        "kind": "signature"
+      },
+      {
+        "kind": "disk"
+      },
+      {
+        "kind": "not_newer"
+      },
+      {
+        "kind": "other"
+      },
+      {
+        "kind": "installer",
+        "code": 23
+      },
+      {
+        "kind": "sources",
+        "sources": [
+          {
+            "via": "github",
+            "why": "connection refused"
+          }
+        ]
+      }
+    ],
+    "calls": [
+      {
+        "do": "view"
+      },
+      {
+        "do": "release",
+        "version": "1.0.2"
+      },
+      {
+        "do": "schedule",
+        "machines": [
+          "server"
+        ],
+        "version": "1.0.2"
+      },
+      {
+        "do": "schedule",
+        "machines": [
+          "server"
+        ],
+        "version": null
+      },
+      {
+        "do": "policy",
+        "minimum": null,
+        "managed_auto": true
+      }
+    ],
+    "device_calls": [
+      {
+        "do": "preferences",
+        "auto": true,
+        "relays": null
+      },
+      {
+        "do": "progress",
+        "stage": {
+          "kind": "waiting_idle",
+          "version": "1.0.2"
+        }
+      },
+      {
+        "do": "progress",
+        "stage": {
+          "kind": "idle"
+        }
+      }
+    ],
+    "replies": [
+      {
+        "kind": "view",
+        "view": {
+          "hub": "1.0.1",
+          "stable": {
+            "version": "1.0.2",
+            "notes": "An update.",
+            "pub_date": "2026-10-20T12:00:00Z",
+            "platforms": {}
+          },
+          "beta": null,
+          "releases": [
+            {
+              "version": "1.0.2",
+              "notes": "An update.",
+              "pub_date": "2026-10-20T12:00:00Z",
+              "platforms": {}
+            }
+          ],
+          "versions": [
+            {
+              "version": "1.0.2",
+              "published": "2026-10-20T12:00:00Z",
+              "summary": "An update.",
+              "manifest": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "problem": null
+            },
+            {
+              "version": "1.0.3",
+              "published": null,
+              "summary": null,
+              "manifest": null,
+              "problem": {
+                "reason": {
+                  "kind": "other"
+                },
+                "why": "manifest unavailable"
+              }
+            }
+          ],
+          "policy": {
+            "channel": "stable",
+            "managed_auto": true
+          },
+          "machines": [
+            {
+              "machine": "server",
+              "owner": "owner",
+              "group": null,
+              "kind": "headless",
+              "online": false,
+              "reported": "2026-10-20T12:00:00Z",
+              "kernel": "1.0.1",
+              "app": null,
+              "target": "fastctx-x86_64-unknown-linux-gnu",
+              "channel": "stable",
+              "auto": true,
+              "auto_chosen": false,
+              "relays": true,
+              "github": false,
+              "github_at": "2026-10-20T12:00:00Z",
+              "check_failure": {
+                "kind": "unreachable",
+                "reason": "dns"
+              },
+              "checking": false,
+              "stage": {
+                "kind": "idle"
+              },
+              "due": {
+                "version": "1.0.2",
+                "by": "owner",
+                "at": "2026-10-20T12:00:00Z",
+                "manifest": {
+                  "version": "1.0.2",
+                  "notes": "An update.",
+                  "pub_date": "2026-10-20T12:00:00Z",
+                  "platforms": {}
+                },
+                "problem": {
+                  "reason": {
+                    "kind": "signature"
+                  },
+                  "why": "the package does not match its signature"
+                }
+              },
+              "offer": {
+                "version": "1.0.2",
+                "notes": "An update.",
+                "pub_date": "2026-10-20T12:00:00Z",
+                "platforms": {}
+              },
+              "actions": {
+                "update": {
+                  "allowed": true,
+                  "reason": null
+                },
+                "choose": {
+                  "allowed": true,
+                  "reason": null
+                },
+                "settings": {
+                  "allowed": false,
+                  "reason": "offline"
+                },
+                "schedule": {
+                  "allowed": true,
+                  "reason": null
+                },
+                "cancel": {
+                  "allowed": true,
+                  "reason": null
+                }
+              }
+            }
+          ],
+          "available": 1
+        }
+      },
+      {
+        "kind": "scheduled",
+        "results": [
+          {
+            "machine": "server",
+            "done": false,
+            "reason": "too_old",
+            "why": "update this machine first"
+          }
+        ]
+      },
+      {
+        "kind": "release",
+        "choice": {
+          "version": "1.0.3",
+          "published": null,
+          "summary": null,
+          "manifest": null,
+          "problem": {
+            "reason": {
+              "kind": "other"
+            },
+            "why": "manifest unavailable"
+          }
+        }
+      },
+      {
+        "kind": "done"
+      }
+    ]
+  },
   "profile": {
     "calls": [
       {
@@ -18880,6 +19920,10 @@
             "machine": "laptop",
             "resident": "codex-ab12"
           },
+          "conversation": {
+            "machine": "desktop",
+            "resident": "codex-ab12"
+          },
           "town": "world",
           "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
           "name": "截图.png",
@@ -18894,6 +19938,10 @@
           "id": "attachment-ab12",
           "owner": {
             "machine": "laptop",
+            "resident": "codex-ab12"
+          },
+          "conversation": {
+            "machine": "desktop",
             "resident": "codex-ab12"
           },
           "town": "world",
@@ -18915,6 +19963,10 @@
           "id": "attachment-ab12",
           "owner": {
             "machine": "laptop",
+            "resident": "codex-ab12"
+          },
+          "conversation": {
+            "machine": "desktop",
             "resident": "codex-ab12"
           },
           "town": "world",
@@ -18955,6 +20007,25 @@
           }
         },
         "max": 96
+      },
+      {
+        "call": "upload",
+        "target": {
+          "kind": "sent",
+          "machine": "desktop",
+          "target": {
+            "kind": "resident",
+            "resident": "codex-ab12"
+          },
+          "operation": "upload-1"
+        },
+        "node": "desktop",
+        "file": {
+          "name": "截图.png",
+          "media_type": "image/png",
+          "size": 3145728,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
       },
       {
         "call": "upload",
@@ -19012,6 +20083,10 @@
               "machine": "laptop",
               "resident": "codex-ab12"
             },
+            "conversation": {
+              "machine": "desktop",
+              "resident": "codex-ab12"
+            },
             "town": "world",
             "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
             "name": "截图.png",
@@ -19038,6 +20113,10 @@
               "machine": "laptop",
               "resident": "codex-ab12"
             },
+            "conversation": {
+              "machine": "desktop",
+              "resident": "codex-ab12"
+            },
             "town": "world",
             "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
             "name": "截图.png",
@@ -19054,6 +20133,10 @@
         "id": "attachment-ab12",
         "owner": {
           "machine": "laptop",
+          "resident": "codex-ab12"
+        },
+        "conversation": {
+          "machine": "desktop",
           "resident": "codex-ab12"
         },
         "town": "world",
@@ -19079,6 +20162,10 @@
                     "id": "attachment-ab12",
                     "owner": {
                       "machine": "laptop",
+                      "resident": "codex-ab12"
+                    },
+                    "conversation": {
+                      "machine": "desktop",
                       "resident": "codex-ab12"
                     },
                     "town": "world",
@@ -19138,6 +20225,10 @@
             "machine": "laptop",
             "resident": "codex-ab12"
           },
+          "conversation": {
+            "machine": "desktop",
+            "resident": "codex-ab12"
+          },
           "town": "world",
           "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
           "name": "截图.png",
@@ -19153,6 +20244,10 @@
           "id": "attachment-ab12",
           "owner": {
             "machine": "laptop",
+            "resident": "codex-ab12"
+          },
+          "conversation": {
+            "machine": "desktop",
             "resident": "codex-ab12"
           },
           "town": "world",
@@ -19186,6 +20281,42 @@
         "max": 96
       },
       {
+        "call": "reserve_attachment",
+        "target": {
+          "kind": "resident",
+          "resident": "codex-ab12"
+        },
+        "file": {
+          "name": "截图.png",
+          "media_type": "image/png",
+          "size": 3145728,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "operation": "upload-1",
+        "composer": null
+      },
+      {
+        "call": "commit_attachment",
+        "attachment": {
+          "id": "attachment-ab12",
+          "owner": {
+            "machine": "laptop",
+            "resident": "codex-ab12"
+          },
+          "conversation": {
+            "machine": "desktop",
+            "resident": "codex-ab12"
+          },
+          "town": "world",
+          "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
+          "name": "截图.png",
+          "media_type": "image/png",
+          "size": 3145728,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "preview": null
+      },
+      {
         "call": "upload",
         "target": {
           "kind": "resident",
@@ -19207,6 +20338,10 @@
             "id": "attachment-ab12",
             "owner": {
               "machine": "laptop",
+              "resident": "codex-ab12"
+            },
+            "conversation": {
+              "machine": "desktop",
               "resident": "codex-ab12"
             },
             "town": "world",
@@ -19233,6 +20368,10 @@
               "machine": "laptop",
               "resident": "codex-ab12"
             },
+            "conversation": {
+              "machine": "desktop",
+              "resident": "codex-ab12"
+            },
             "town": "world",
             "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
             "name": "截图.png",
@@ -19249,6 +20388,10 @@
         "id": "attachment-ab12",
         "owner": {
           "machine": "laptop",
+          "resident": "codex-ab12"
+        },
+        "conversation": {
+          "machine": "desktop",
           "resident": "codex-ab12"
         },
         "town": "world",
@@ -19278,6 +20421,10 @@
                 "machine": "laptop",
                 "resident": "codex-ab12"
               },
+              "conversation": {
+                "machine": "desktop",
+                "resident": "codex-ab12"
+              },
               "town": "world",
               "path": "C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png",
               "name": "截图.png",
@@ -19300,7 +20447,7 @@
         }
       }
     ],
-    "host_text": "=== from fastctx (user attachments, v2) ===\nThe user attached these files. Each path is on the machine named with it; sizes are in bytes. Look at them with `fastctx view` on that machine (`on MACHINE fastctx view PATH`); images come back as images.\n{\"delivery\":\"talk-ab12\",\"from\":\"phone\",\"attachments\":[{\"id\":\"attachment-ab12\",\"owner\":{\"machine\":\"laptop\",\"resident\":\"codex-ab12\"},\"town\":\"world\",\"path\":\"C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png\",\"name\":\"截图.png\",\"media_type\":\"image/png\",\"size\":3145728,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n=== user's words (verbatim) ===\n看这张图。\nKeep my words verbatim."
+    "host_text": "=== from fastctx (user attachments, v2) ===\nThe user attached these files. Each original stays on owner.machine at path; sizes are in bytes. Use fastctx view directly for files on your shell's machine, and use on with the named machine for files elsewhere. Images come back as images.\n{\"delivery\":\"talk-ab12\",\"from\":\"phone\",\"attachments\":[{\"id\":\"attachment-ab12\",\"owner\":{\"machine\":\"laptop\",\"resident\":\"codex-ab12\"},\"conversation\":{\"machine\":\"desktop\",\"resident\":\"codex-ab12\"},\"town\":\"world\",\"path\":\"C:/world/towns/world/residents/codex-ab12/attachments/attachment-ab12/content.png\",\"name\":\"截图.png\",\"media_type\":\"image/png\",\"size\":3145728,\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}\n=== user's words (verbatim) ===\n看这张图。\nKeep my words verbatim."
   },
   "composer": {
     "snapshots": [
@@ -20830,6 +21977,10 @@
               "tokens": 2800000,
               "usd": 4390000
             },
+            "fable": {
+              "tokens": 1000000,
+              "usd": 3000000
+            },
             "went": {
               "models": [
                 {
@@ -20864,6 +22015,10 @@
             "day": {
               "tokens": 220000,
               "usd": 310000
+            },
+            "fable": {
+              "tokens": 0,
+              "usd": 0
             },
             "went": {
               "models": [
@@ -21043,6 +22198,10 @@
               "tokens": 2800000,
               "usd": 4390000
             },
+            "fable": {
+              "tokens": 1000000,
+              "usd": 3000000
+            },
             "went": {
               "models": [
                 {
@@ -21077,6 +22236,10 @@
             "day": {
               "tokens": 220000,
               "usd": 310000
+            },
+            "fable": {
+              "tokens": 0,
+              "usd": 0
             },
             "went": {
               "models": [
@@ -21197,6 +22360,163 @@
             ]
           }
         ]
+      }
+    ]
+  },
+  "usage_calls": {
+    "calls": [
+      {
+        "call": "agent_calls",
+        "machine": "laptop",
+        "agent": "claude",
+        "dir": "/home/me/.claude",
+        "query": {
+          "person": null,
+          "model": null,
+          "source": "agent",
+          "outcome": null,
+          "conversation": null,
+          "turn": null,
+          "before": null
+        }
+      }
+    ],
+    "replies": [
+      {
+        "reply": "agent_calls",
+        "rows": [
+          {
+            "cursor": {
+              "at": "2026-10-20T12:00:00Z",
+              "key": "example-request"
+            },
+            "who": null,
+            "model": "claude-haiku-5-5",
+            "tokens": {
+              "input": 100,
+              "output": 50
+            },
+            "usd": 35,
+            "source": "agent",
+            "agent": "worker",
+            "timing": {
+              "started_at": "2026-10-20T12:00:00Z",
+              "first_at": "2026-10-20T12:00:00Z",
+              "ended_at": "2026-10-20T12:00:00Z",
+              "approximate": false
+            },
+            "outcome": "completed",
+            "phase": "finished",
+            "conversation": "claude-abcd",
+            "turn": "turn-one"
+          },
+          {
+            "cursor": {
+              "at": "2026-10-20T12:00:00Z",
+              "key": "example-request"
+            },
+            "who": null,
+            "model": "claude-haiku-5-5",
+            "tokens": {
+              "input": 100,
+              "output": 50
+            },
+            "usd": 35,
+            "source": "agent",
+            "agent": "worker",
+            "timing": {
+              "started_at": "2026-10-20T12:00:00Z",
+              "first_at": "2026-10-20T12:00:00Z",
+              "ended_at": "2026-10-20T12:00:00Z",
+              "approximate": false
+            },
+            "outcome": "completed",
+            "phase": "finished",
+            "conversation": null,
+            "turn": null
+          }
+        ],
+        "next": {
+          "at": "2026-10-20T12:00:00Z",
+          "key": "next-page"
+        }
+      }
+    ],
+    "remote_calls": [
+      {
+        "call": "agent_calls",
+        "agent": "claude",
+        "dir": "/home/me/.claude",
+        "query": {
+          "person": null,
+          "model": null,
+          "source": "agent",
+          "outcome": null,
+          "conversation": null,
+          "turn": null,
+          "before": null
+        }
+      }
+    ],
+    "remote_replies": [
+      {
+        "reply": "agent_calls",
+        "rows": [
+          {
+            "cursor": {
+              "at": "2026-10-20T12:00:00Z",
+              "key": "example-request"
+            },
+            "who": null,
+            "model": "claude-haiku-5-5",
+            "tokens": {
+              "input": 100,
+              "output": 50
+            },
+            "usd": 35,
+            "source": "agent",
+            "agent": "worker",
+            "timing": {
+              "started_at": "2026-10-20T12:00:00Z",
+              "first_at": "2026-10-20T12:00:00Z",
+              "ended_at": "2026-10-20T12:00:00Z",
+              "approximate": false
+            },
+            "outcome": "completed",
+            "phase": "finished",
+            "conversation": "claude-abcd",
+            "turn": "turn-one"
+          },
+          {
+            "cursor": {
+              "at": "2026-10-20T12:00:00Z",
+              "key": "example-request"
+            },
+            "who": null,
+            "model": "claude-haiku-5-5",
+            "tokens": {
+              "input": 100,
+              "output": 50
+            },
+            "usd": 35,
+            "source": "agent",
+            "agent": "worker",
+            "timing": {
+              "started_at": "2026-10-20T12:00:00Z",
+              "first_at": "2026-10-20T12:00:00Z",
+              "ended_at": "2026-10-20T12:00:00Z",
+              "approximate": false
+            },
+            "outcome": "completed",
+            "phase": "finished",
+            "conversation": null,
+            "turn": null
+          }
+        ],
+        "next": {
+          "at": "2026-10-20T12:00:00Z",
+          "key": "next-page"
+        }
       }
     ]
   }

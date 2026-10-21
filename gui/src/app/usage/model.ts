@@ -27,6 +27,8 @@ export interface Person extends Named {
   week: Sum;
   /** What it used over the last 24 hours; null where the node does not say. */
   day: Sum | null;
+  /** What it used on Fable models this week; null where the node does not say. */
+  fable: Sum | null;
   /** What its week went to; null where the node does not say. */
   went: Went | null;
 }
@@ -93,20 +95,22 @@ const add = (a: Sum, b: Sum): Sum => ({ tokens: a.tokens + b.tokens, usd: a.usd 
  *  named alike merged, the reader first and the rest by what they used
  *  this week. */
 export function usageOf(report: UsageReport, nameOf: (account: HubAccount | null) => Named): Usage {
-  const named: { named: Named; week: Sum; day: Sum | null; went: Went | null }[] = [];
+  const named: { named: Named; week: Sum; day: Sum | null; fable: Sum | null; went: Went | null }[] = [];
   const into: number[] = report.people.map((person) => {
     const one = nameOf(person.account);
     const day = person.day ? sumOf(person.day) : null;
+    const fable = person.fable ? sumOf(person.fable) : null;
     const went = person.went ? wentOf(person.went) : null;
     const found = named.findIndex((known) => known.named.key === one.key);
     if (found >= 0) {
       const known = named[found]!;
       known.week = add(known.week, sumOf(person.week));
       known.day = known.day && day ? add(known.day, day) : null;
+      known.fable = known.fable && fable ? add(known.fable, fable) : null;
       known.went = known.went && went ? both(known.went, went) : null;
       return found;
     }
-    named.push({ named: one, week: sumOf(person.week), day, went });
+    named.push({ named: one, week: sumOf(person.week), day, fable, went });
     return named.length - 1;
   });
   const order = named.map((_, index) => index).sort((a, b) => {
@@ -115,8 +119,8 @@ export function usageOf(report: UsageReport, nameOf: (account: HubAccount | null
   });
   const place = new Map(order.map((was, now) => [was, now]));
   const people = order.map((was, index): Person => {
-    const { named: one, week, day, went } = named[was]!;
-    return { ...one, index, ink: INKS[index % INKS.length]!, week, day, went };
+    const { named: one, week, day, fable, went } = named[was]!;
+    return { ...one, index, ink: INKS[index % INKS.length]!, week, day, fable, went };
   });
   const hours = new Map<string, Hour>();
   for (const hour of report.hours) {
@@ -285,7 +289,8 @@ export function track(usage: Usage, minutes: number): Track | null {
 }
 
 /** How one person's spending went through the week against a weekly cap,
- *  as a window's share: what they had spent by the end of each hour. */
+ *  as a window's share: what they had spent by the end of each hour. An
+ *  hour the week's start cut in two ends at the next whole hour. */
 export function allowanceTrack(usage: Usage, person: number, cap: number, now: number): Track | null {
   if (cap <= 0) return null;
   const points: [number, number][] = [];
@@ -293,7 +298,7 @@ export function allowanceTrack(usage: Usage, person: number, cap: number, now: n
   for (const hour of usage.hours) {
     if (hour.person !== person || hour.at < usage.week.start || hour.at >= now || !hour.usd) continue;
     spent += hour.usd;
-    points.push([Math.min(now, hour.at + HOUR_MS), spent / cap]);
+    points.push([Math.min(now, (Math.floor(hour.at / HOUR_MS) + 1) * HOUR_MS), spent / cap]);
   }
   return { points, last: spent / cap, resets: usage.week.end };
 }

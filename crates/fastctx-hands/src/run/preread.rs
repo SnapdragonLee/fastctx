@@ -11,6 +11,14 @@ pub fn machines_named(script: &str) -> Vec<(String, usize)> {
     super::heredoc::on_machines(script)
 }
 
+/// A script containing only literal `on` commands: the first machine named,
+/// and the body when it is a single command, which then goes there whole.
+/// No expansion, local filesystem access or local bash is involved in
+/// recognizing it: the machine that runs what is sent checks it there.
+pub fn on_only(script: &str) -> Result<(String, Option<String>), Failure> {
+    super::heredoc::on_only(script)
+}
+
 /// Checks source with the machine's own bash and checks here-document hazards.
 /// No startup files or source commands are executed. This checks literal source,
 /// not programs generated at runtime by `eval`, `source`, or another interpreter.

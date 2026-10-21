@@ -82,6 +82,9 @@ export interface Someone {
  *  that tells the World nothing of its turns); or not taken. */
 export type Sent = "turn" | "unseen" | "failed";
 
+/** A phone's width, where the conversation's measure is its dial alone. */
+const phoneWide = matchMedia("(max-width: 480px)");
+
 export interface PageOptions {
   words: Words;
   here: string;
@@ -172,6 +175,8 @@ export interface PageOptions {
   /** One of the host's own agents' own record, read from the
    *  conversation's machine as its box opens. */
   agentRecord?: ((agent: string) => Promise<AgentActivity>) | undefined;
+  /** A turn's requests one by one, on its login's usage page. */
+  calls?: ((turn: string) => void) | undefined;
 }
 
 /** How many times what a conversation offers is asked again after asking
@@ -377,6 +382,8 @@ export class ConversationPage {
     this.spoken.setAttribute("role", "status");
     this.element.append(this.spoken);
     this.context = this.element.querySelector<HTMLElement>(".composer-context")!;
+    this.placeDial();
+    phoneWide.addEventListener("change", this.placeDial);
     if (options.controls) {
       this.badge = new UsageBadge(this.context, options.controls.words.usage);
       const usagePop = this.element.querySelector<HTMLElement>(".usage-pop")!;
@@ -452,6 +459,7 @@ export class ConversationPage {
       turnAct: controls && ((act, turn, words, kept) => this.turnAct(act, turn, words, kept)),
       lines: options.lines,
       agentRecord: options.agentRecord,
+      turnCalls: options.calls,
     });
     // The host's own agents as one picture (`agents-panel.ts`): a lane
     // pressed brings the row of the call that started it into view.
@@ -814,6 +822,7 @@ export class ConversationPage {
     const turn = place ? this.turnOf(place.key) : null;
     apply();
     this.update({ read: true });
+    if (this.wantedTurn) return this.bringTurn();
     if (!place) return;
     cancelAnimationFrame(this.frame);
     this.render();
@@ -822,6 +831,42 @@ export class ConversationPage {
     void this.options.conversation.reachTurn(turn).then((reached) => {
       this.render();
       if (!reached || !this.view.restore(place)) this.toLatest();
+    });
+  }
+
+  /** A turn asked for from elsewhere, as a request in its login's usage,
+   *  until it is brought into view. */
+  private wantedTurn: string | null = null;
+
+  /** Brings `turn` into view, read first where it is not held; a page
+   *  whose conversation has not come yet brings it once it does. */
+  showTurn(turn: string): void {
+    this.wantedTurn = turn;
+    this.bringTurn();
+  }
+
+  private bringTurn(): void {
+    const turn = this.wantedTurn;
+    if (!turn || !this.element.isConnected) return;
+    const conversation = this.options.conversation;
+    const first = () => conversation.blocks().find((block) => this.turnOf(block.key) === turn);
+    const bring = (key: string) => {
+      this.wantedTurn = null;
+      this.following = false;
+      cancelAnimationFrame(this.frame);
+      this.render();
+      this.view.bring(key);
+      this.drawLatest();
+    };
+    const held = first();
+    if (held) return bring(held.key);
+    void conversation.reachTurn(turn).then((reached) => {
+      if (this.wantedTurn !== turn) return;
+      const found = reached ? first() : undefined;
+      if (found) bring(found.key);
+      // A conversation that came without it does not have it: it opens
+      // as it would.
+      else if (conversation.blocks().length) this.wantedTurn = null;
     });
   }
 
@@ -845,8 +890,18 @@ export class ConversationPage {
     }
   }
 
+  /** On a phone the dial stands in the head, away from the button that
+   *  sends and stops under the thumb; elsewhere it ends the input's row. */
+  private readonly placeDial = () => {
+    const head = this.element.querySelector<HTMLElement>(".page-head-actions");
+    const row = this.element.querySelector<HTMLElement>(".composer-row")!;
+    if (phoneWide.matches && head) head.prepend(this.context);
+    else row.insertBefore(this.context, row.querySelector(".composer-action"));
+  };
+
   /** Stops what the page keeps asking for. */
   leave(): void {
+    phoneWide.removeEventListener("change", this.placeDial);
     clearTimeout(this.offersAgain);
     cancelAnimationFrame(this.frame);
     this.view.destroy();

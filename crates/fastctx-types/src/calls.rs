@@ -388,6 +388,13 @@ pub enum Call {
         agent: AgentName,
         dir: std::path::PathBuf,
     },
+    /// Up to one hundred request records, newest first, redacted for this reader.
+    AgentCalls {
+        machine: MachineName,
+        agent: AgentName,
+        dir: std::path::PathBuf,
+        query: crate::usage_calls::UsageCallsQuery,
+    },
     /// One resident or job in detail, by its id, from every machine that
     /// has it (`fastctx w <id>`).
     Look {
@@ -466,6 +473,12 @@ pub enum Call {
     Data(crate::data::DataCall),
     /// New versions of Fastctx for this machine (`crate::update`).
     Update(crate::update::UpdateCall),
+    /// Account-scoped update management on a capable hub.
+    NetworkUpdates {
+        hub: crate::HubName,
+        account: crate::AccountName,
+        request: crate::update::ViewCall,
+    },
     /// Update `machine`'s World program from the newest release on its
     /// line; answered with how updates stand there. What interfaces before
     /// 1.0.1 beta 3 ask; later ones ask `MachineUpdates`.
@@ -769,6 +782,7 @@ pub enum Reply {
     },
     Data(crate::data::DataReply),
     Update(Box<crate::update::State>),
+    NetworkUpdates(crate::update::ViewReply),
     ClaudeSessionDirectory {
         path: String,
     },
@@ -804,6 +818,7 @@ pub enum Reply {
     AgentLogins(crate::logins::WorldLogins),
     MachineAgentLogins(Box<crate::logins::MachineLogins>),
     AgentUsage(Box<crate::usage::UsageReport>),
+    AgentCalls(Box<crate::usage_calls::UsageCallsPage>),
     AgentChangePreview(Box<crate::logins::ChangePreview>),
     AgentLoginChanged(Box<crate::logins::LoginChange>),
     Towns {
@@ -865,10 +880,13 @@ pub enum Reply {
     Nodes(NodesReply),
     Machines {
         /// Where the session's shell starts, as written: the machine it
-        /// lives on. None for an agent assisting from another account: it
-        /// may not work where it runs, and each of its commands names its
-        /// machine.
+        /// lives on. None for whoever asks without living here and may not
+        /// work here.
         here: Option<String>,
+        /// Whether the session is an agent assisting another account with
+        /// one of `here`'s owner's logins.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        assisting: bool,
         /// The other machines it may work on.
         others: Vec<String>,
         /// Those of `others` their owners put in groups, group by group.

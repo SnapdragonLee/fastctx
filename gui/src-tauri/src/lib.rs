@@ -1149,12 +1149,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             updates::update_state,
+            updates::update_progress,
             updates::update_look,
             updates::update_set,
             updates::update_fetch,
             updates::update_choose,
             updates::update_machine,
             updates::machine_updates,
+            updates::network_updates,
             updates::update_install,
             #[cfg(desktop)]
             removal::removal_plan,
@@ -1220,6 +1222,7 @@ pub fn run() {
             logins::read_agent_limits,
             logins::set_agent_title,
             logins::agent_usage,
+            logins::agent_calls,
             world_watch::world_now,
             world_watch::world_watch,
             since,

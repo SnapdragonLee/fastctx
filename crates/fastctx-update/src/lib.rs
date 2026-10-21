@@ -5,12 +5,14 @@
 //! replaces them.
 
 pub mod cache;
+pub mod catalog;
 pub mod download;
 pub mod github;
 pub mod kernel;
 pub mod obtain;
 pub mod pace;
 pub mod pool;
+pub mod state;
 pub mod throttle;
 pub mod verify;
 

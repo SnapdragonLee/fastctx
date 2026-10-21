@@ -48,9 +48,12 @@ import type { Choices } from "../src/world/bridge";
 import type { ComposerSnapshot, ComposerMutation, ComposerUpdated } from "../src/world/composer";
 import type { MachineLogPage } from "../src/world/machine-log";
 import type { MachineStats } from "../src/world/stats";
+import type { UsageCallsPage, UsageCallsQuery } from "../src/world/usage-calls";
 import type { UsageReport } from "../src/world/usage";
 import type { McpReply, ProfileView } from "../src/world/profile";
+import type { UpdateState, UpdateCall, CheckFailure, FailureReason, UpdatesViewCall, UpdatesViewReply } from "../src/world/updates";
 export const fixture = ${json.trimEnd()} satisfies {
+  updates: { device_calls: UpdateCall[]; states: UpdateState[]; checks: CheckFailure[]; reasons: FailureReason[]; calls: UpdatesViewCall[]; replies: UpdatesViewReply[] };
   // An account's own configuration as its pages read and change it.
   profile: { calls: unknown; replies: (({ reply: "profile" } & ProfileView) | { reply: "profile_written"; version: number } | { reply: "mcp"; result: McpReply })[] };
   machine_log: MachineLogPage[];
@@ -131,6 +134,11 @@ export const fixture = ${json.trimEnd()} satisfies {
   // How a machine says it is doing, for its details page.
   stats: { stats: MachineStats[] };
   // What a login was used for, as its machine's node answers it.
+  usage_calls: {
+    calls: { call: "agent_calls"; machine: string; agent: string; dir: string; query: UsageCallsQuery }[];
+    replies: ({ reply: "agent_calls" } & UsageCallsPage)[];
+    remote_calls: unknown; remote_replies: unknown;
+  };
   usage: { calls: unknown; replies: ({ reply: "agent_usage" } & UsageReport)[]; remote_calls: unknown; remote_replies: unknown };
   // Finding files for an @ mention: what the interface asks and is answered.
   file_search: {

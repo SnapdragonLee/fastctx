@@ -20,6 +20,7 @@ import "./conversation/model-panel.css";
 import "./conversation/agents.css";
 import "./longview/longview.css";
 import "./app/shell.css";
+import "./app/press.css";
 import "./app/sheet.css";
 import "./app/updates.css";
 import "./app/versions.css";
@@ -31,6 +32,7 @@ import "./app/assist.css";
 import "./app/machines.css";
 import "./app/machine-framed.css";
 import "./app/machine-list.css";
+import "./app/update-view.css";
 import "./app/machine-page.css";
 import "./app/machine-manage.css";
 import "./app/agents.css";
@@ -52,12 +54,17 @@ import { ProjectActs, enProjectActs, zhProjectActs } from "./app/project-acts";
 import { enMe, zhMe } from "./app/me-words";
 import { enPeople, zhPeople } from "./app/people-words";
 import { LoginPage } from "./app/login";
-import { MachinesPage } from "./app/machines";
+import { MachinesPage, showUpdatesNext } from "./app/machines";
 import { AgentLoginsPage } from "./app/agent-logins";
 import { LoginUsagePage } from "./app/usage/login-page";
 import { enUsage, zhUsage } from "./app/usage/words";
 import "./app/usage/usage.css";
+import { enCalls, zhCalls } from "./app/usage/calls-words";
+import "./app/usage/calls.css";
+import { keptRecord } from "./app/usage/kept";
+import { ActsMenu } from "./app/acts-menu";
 import { specimenUsage } from "./specimen/usage";
+import { specimenCalls } from "./specimen/calls";
 import { enAgentLogins, zhAgentLogins } from "./app/agent-logins-words";
 import { enProfile, zhProfile } from "./app/profile-words";
 import { isHost, keepSection, sectionOf, tabOf } from "./app/agent-sections";
@@ -97,6 +104,7 @@ import "./app/talk-menu.css";
 import "./app/focus-panel.css";
 import "./app/project-form.css";
 import "./app/folder-picker.css";
+import "./app/fingers.css";
 import { Palette, type PaletteItem } from "./app/palette";
 import { ProjectForm } from "./app/project-form";
 import { link, placeOf, talkLink, type Place } from "./app/places";
@@ -146,7 +154,7 @@ import {
 import { enRemoval, zhRemoval } from "./app/removal-words";
 import { enAccess, enLogin, enMachines, enToken, zhAccess, zhLogin, zhMachines, zhToken } from "./app/account-words";
 import { LASTING, loginsOf, type AccountChange, type Login, type TokenSeen, type TokenWay } from "./world/accounts";
-import { assistantOf, assistantsOf, fileHome, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
+import { assistantOf, assistantsOf, filePlaces, groupsOf, inNoNetwork, loginKey, loginLabel, machinesOf, sameLogin, workPlaces, type Machine } from "./app/reach";
 import type { FocusPlace } from "./app/focus-panel";
 import { folders as foldersOf, noFocus, type Focus, type Folders } from "./world/focus";
 import { ComposerSession } from "./conversation/composer";
@@ -165,6 +173,8 @@ import type { Away, Happening, WorldState } from "./home/model";
 import { happeningsOf } from "./home/since";
 import { enHome, zhHome } from "./home/words";
 import { installHints } from "./app/hint";
+import { installSheetDrag } from "./app/sheet-drag";
+import { installPresses } from "./app/press";
 import { installPointerHints } from "./app/pointer-hint";
 import { installPens } from "./pen/filters";
 import { installRules } from "./pen/rules";
@@ -199,6 +209,7 @@ import { enPages, zhPages } from "./pages/words";
 import { act as pageAct, consent as pageConsent, pageHistory, readPage, restore as restorePage, withdraw as withdrawPage } from "./world/pages";
 import { specimenPageTools, specimenPageWorld } from "./specimen/pages";
 import type { Address, SessionEvent } from "./world/events";
+import type { MachineLogins } from "./world/logins";
 import { ownerResident, type ResidentNow } from "./world/world";
 import { agentName, titleOf } from "./world/names";
 import { foldedOf, MachineMap, MAP_ORDER, type MachineMapScene } from "./app/machine-map";
@@ -206,6 +217,7 @@ import { mapOf } from "./app/map-of";
 import {
   addAgentLogin,
   agentFolder,
+  agentCalls,
   agentLogins,
   agentUsage,
   changeAgentLogin,
@@ -275,13 +287,14 @@ import { en, zh } from "./words";
 import { updates as updateSeam } from "./world/updates";
 import { Updates } from "./app/updates";
 import { UpdateCard } from "./app/update-card";
-import { updateOlder } from "./app/update-older";
-import { superLoginOver } from "./app/machine-logins";
 import { VersionWindow } from "./app/version-window";
 import { showAttachedWith } from "./conversation/attached-pictures";
 import { viewPictures } from "./conversation/pictures";
 import { enUpdate, zhUpdate } from "./app/update-words";
 import { specimenUpdates } from "./specimen/updates";
+import { specimenUpdateView } from "./specimen/update-view";
+import { networkUpdates } from "./world/update-view";
+import { enUpdateView, zhUpdateView } from "./app/update-view-words";
 import { getVersion } from "@tauri-apps/api/app";
 import { desktopAvailable } from "./world/desktop";
 import { answerWith, notifying, startPresence } from "./app/presence";
@@ -931,6 +944,8 @@ const updateWords = english ? enUpdate : zhUpdate;
 /** Where updates are asked: this device's node or device, or the specimen's
  *  stand-in, one for the page's whole life so what it keeps holds. */
 const specimenUpdate = live ? null : specimenUpdates(params, params.has("phone"));
+/** Each login's update view of the machines page, from its hub. */
+const askUpdatesView = live ? networkUpdates : specimenUpdateView(() => store.world.peek());
 const updatesAsked = specimenUpdate ? specimenUpdate.seam : updateSeam;
 const appUpdates = (() => {
   const updates = new Updates(updatesAsked, idleHere);
@@ -942,23 +957,26 @@ const appUpdates = (() => {
     );
   return updates;
 })();
-/** Has a machine of 1.0.1 beta 1 or 2 update itself, its line named first
- *  under an earlier hub (`app/update-older.ts`). */
-const updateOlderMachine = (name: string) =>
-  updateOlder(name, {
-    network: () => appUpdates.state.peek()?.network,
-    superOver: (machine) => {
-      const world = store.world.peek();
-      // The policy this device knows is its one hub's; on several, whose it
-      // is is not told apart here, and the line is left as it is.
-      if (!world || world.accounts.hubs.length !== 1) return undefined;
-      const found = machinesOf(world).find((one) => one.name === machine);
-      return found ? superLoginOver(found, world) : undefined;
-    },
-    change,
-    machine: (one) => updatesAsked.machine(one),
-  });
-const updateCard = new UpdateCard(appUpdates, updateWords, live ? !onComputer() : params.has("phone"));
+/** Has a machine of a release before 1.0.1 beta 3 update itself to the
+ *  newest on its line: what such a machine takes. */
+const updateOlderMachine = (name: string) => updatesAsked.machine(name);
+const updateCard = new UpdateCard(appUpdates, updateWords, live ? !onComputer() : params.has("phone"), {
+  view: english ? enUpdateView : zhUpdateView,
+  // The other machines this device's first account that the hub answers
+  // for may update, that can take a newer version.
+  count: async () => {
+    const world = store.world.peek();
+    for (const login of loginsOf(world?.accounts)) {
+      const reply = await askUpdatesView(login.hub, login.account, { do: "view" }).catch(() => null);
+      if (reply?.kind === "view") return reply.view.machines.filter((one) => one.machine !== world?.here && one.offer && one.actions.update.allowed).length;
+    }
+    return 0;
+  },
+  open: () => {
+    showUpdatesNext();
+    location.hash = link({ kind: "machines" });
+  },
+});
 const versionWindow = new VersionWindow(updateWords.versions);
 // A picture attached and not yet sent opens in the same viewer as the
 // conversation's pictures.
@@ -1442,6 +1460,7 @@ function specimenTalk(address: Address): KeepablePage {
     jobOutput: async (job) => specimenOutput(job.command),
     lines: async (_machine, path) => specimenLines(path),
     agentRecord: (agent) => specimenAgentRecord(agent),
+    calls: (turn) => void openCalls(known?.about ?? { machine: address.machine, host: { agent: sample.agent } }, address, turn),
   });
   // What it started that still runs, as the specimen World lists it.
   const runningJobs = effect(() => {
@@ -1504,6 +1523,7 @@ function specimenTalk(address: Address): KeepablePage {
     element: page.element,
     title: sample.title,
     suspend: () => page.suspend(),
+    reach: (turn: string) => page.showTurn(turn),
     resume: () => page.resume(),
     leave() {
       left = true;
@@ -1616,20 +1636,6 @@ function liveTalk(address: Address): KeepablePage {
         },
       },
       drops: windowDrops,
-      filesOn: (() => {
-        const assistantNow = () => {
-          const known = residentAt(store.world.peek(), address);
-          return known ? assistantOf(store.world.peek(), known) : null;
-        };
-        return {
-          assisting: () => assistantNow() !== null,
-          place: () => {
-            const assistant = assistantNow();
-            return assistant ? fileHome(store.world.peek(), assistant.login) : null;
-          },
-          nowhere: (english ? enNewTalk : zhNewTalk).noFilePlace,
-        };
-      })(),
     },
     manage: talkManage(address, () => page, exported(conversation, someone)),
     send(text, attached) {
@@ -1674,6 +1680,10 @@ function liveTalk(address: Address): KeepablePage {
     jobOutput: (job) => RemoteLines.open(job.machine, job.output, { kind: "output", job: job.job }),
     lines: (machine, path, decoding) => RemoteLines.open(machine, path, decoding),
     agentRecord: (agent) => agentActivity(address, agent),
+    calls: (turn) => {
+      const about = residentAt(store.world.peek(), address)?.about;
+      if (about) void openCalls(about, address, turn);
+    },
   });
   let left = false;
   // What it started that still runs, as the World last answered.
@@ -1788,6 +1798,7 @@ function liveTalk(address: Address): KeepablePage {
     element: page.element,
     title: `${someone.agent} ${someone.machine}`,
     suspend: () => page.suspend(),
+    reach: (turn: string) => page.showTurn(turn),
     resume: () => page.resume(),
     leave() {
       left = true;
@@ -1806,6 +1817,36 @@ const QUIET_BEFORE_LISTED = 10_000;
 
 /** The conversations looked at last, alive (`conversation/kept.ts`). */
 const keptTalks = new KeptPages();
+
+/** The menu of the requests' filters, made when first opened. */
+let callsMenu: ActsMenu | null = null;
+
+/** A turn to bring into view as its conversation is shown. */
+let turnWanted: { key: string; turn: string } | null = null;
+
+/** Opens a conversation at one of its turns: a request's, from its
+ *  login's usage. */
+function openTurn(address: Address, turn: string | null): void {
+  turnWanted = turn ? { key: talkKey(address), turn } : null;
+  location.hash = talkLink(address);
+}
+
+/** One turn's requests, on the usage page of the login its conversation
+ *  works in: the default one's folder as that machine's logins were last
+ *  read, or read now. */
+async function openCalls(about: { machine: string; host: { agent: string }; home?: string | undefined }, address: Address, turn: string): Promise<void> {
+  const agent = about.host.agent;
+  if (agent !== "claude" && agent !== "codex") return;
+  const machine = about.machine;
+  const defaultOf = (logins: MachineLogins | null) => logins?.[agent].listed.find((login) => login.default)?.dir ?? null;
+  let dir = about.home ?? defaultOf(keptRecord(machine));
+  if (!dir) {
+    const read = await (live ? agentLogins(machine) : specimenLogins(machine, specimen.now)).catch(() => null);
+    const heard = read?.machines.find((one) => one.kind === "answered" && one.logins.machine === machine);
+    dir = heard?.kind === "answered" ? defaultOf(heard.logins) : null;
+  }
+  if (dir) location.hash = link({ kind: "usage", machine, agent, dir, turn: { conversation: address.resident, turn } });
+}
 const talkKey = (address: Address) => `${address.resident}@${address.machine}`;
 
 function projectPage(town: string): Page {
@@ -1973,7 +2014,10 @@ function show(next: Place): void {
       break;
     case "talk": {
       const address = next.address;
-      page = keptTalks.page(talkKey(address), () => (live ? liveTalk(address) : specimenTalk(address)));
+      const key = talkKey(address);
+      page = keptTalks.page(key, () => (live ? liveTalk(address) : specimenTalk(address)));
+      if (turnWanted?.key === key) keptTalks.reach(key, turnWanted.turn);
+      turnWanted = null;
       break;
     }
     case "new": {
@@ -2024,6 +2068,7 @@ function show(next: Place): void {
           versions: versionWindow,
           versionsHere,
           words: updateWords,
+          view: english ? enUpdateView : zhUpdateView,
         },
         manage: english ? enManage : zhManage,
         ...(live ? { allowPrivacy: () => void allowPrivacy().catch((error: unknown) => console.error("opening the Mac's privacy settings", error)) } : {}),
@@ -2034,8 +2079,9 @@ function show(next: Place): void {
       page = new MachinesPage({
         store,
         updates: {
-          policy: () => appUpdates.state.peek()?.network?.policy ?? {},
           words: updateWords,
+          view: english ? enUpdateView : zhUpdateView,
+          ask: askUpdatesView,
           minimum: minimumVersions,
           state: appUpdates.state,
           remote: (name, call) => updatesAsked.remote(name, call),
@@ -2144,7 +2190,8 @@ function show(next: Place): void {
       });
       break;
     }
-    case "usage":
+    case "usage": {
+      const usagePlace = next;
       page = new LoginUsagePage({
         store,
         words: english ? enUsage : zhUsage,
@@ -2158,8 +2205,22 @@ function show(next: Place): void {
         usage: (machine, agent, dir) => (live ? agentUsage(machine, agent, dir) : specimenUsage(machine, agent, dir, specimen.now)),
         when,
         talk: (machine, agent, home) => beginTalk(null, loginKey(machine, agent, home), machine),
+        calls: {
+          words: english ? enCalls : zhCalls,
+          menu: (callsMenu ??= new ActsMenu()),
+          ask: (machine, agent, dir, query) => (live ? agentCalls(machine, agent, dir, query) : specimenCalls(machine, agent, dir, query, specimen.now)),
+          open: (machine, conversation, turn) => openTurn({ resident: conversation, machine }, turn),
+          turn: next.turn ?? null,
+          // The address no longer names the turn, and the page stays.
+          unturn: () => {
+            const { turn: _turn, ...all } = usagePlace;
+            place = all;
+            history.replaceState(history.state, "", link(all));
+          },
+        },
       });
       break;
+    }
     case "talks":
     case "archived":
       page = new TalksPage({
@@ -2303,6 +2364,7 @@ function show(next: Place): void {
         updates: {
           updates: appUpdates,
           words: updateWords,
+          view: english ? enUpdateView : zhUpdateView,
           versions: versionsHere,
           relays: live ? onComputer() : !params.has("phone"),
         },
@@ -2561,7 +2623,9 @@ if (live) {
 }
 
 installPens();
+installPresses();
 installHints();
+installSheetDrag();
 installPointerHints();
 installRules();
 installAccess();

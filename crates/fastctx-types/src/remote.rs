@@ -260,6 +260,12 @@ pub enum RemoteCall {
         agent: AgentName,
         dir: std::path::PathBuf,
     },
+    /// Up to one hundred request records, newest first, redacted for this reader.
+    AgentCalls {
+        agent: AgentName,
+        dir: std::path::PathBuf,
+        query: crate::usage_calls::UsageCallsQuery,
+    },
     /// The documents of a canon there, for a town's map.
     Canon {
         path: String,
@@ -295,6 +301,18 @@ pub enum RemoteCall {
         /// after an answer that never came, they go in once.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+    },
+    /// Reserve metadata at the conversation's home; bytes stay with the caller.
+    ReserveAttachment {
+        target: crate::attachments::UploadTarget,
+        file: crate::attachments::UploadFile,
+        operation: String,
+        composer: Option<crate::composer::UploadScope>,
+    },
+    /// Complete a reserved upload with its verified location and small history image.
+    CommitAttachment {
+        attachment: crate::attachments::Attachment,
+        preview: Option<crate::thumbnail::Thumbnail>,
     },
     /// Keep here a file the user attached to their words for `resident`, of
     /// the calling machine, which works here (`world-gui.md`): its receipt
@@ -494,7 +512,9 @@ impl RemoteCall {
             | RemoteCall::UpdateWorld
             | RemoteCall::Updates { .. }
             | RemoteCall::Stats { .. } => Purpose::Hands,
-            RemoteCall::Composer { .. }
+            RemoteCall::ReserveAttachment { .. }
+            | RemoteCall::CommitAttachment { .. }
+            | RemoteCall::Composer { .. }
             | RemoteCall::AttachmentThumbnail { .. }
             | RemoteCall::ReadAttachment { .. }
             | RemoteCall::Ask { .. }
@@ -512,6 +532,7 @@ impl RemoteCall {
             | RemoteCall::AgentLogins
             | RemoteCall::ReadAgentLimits { .. }
             | RemoteCall::AgentUsage { .. }
+            | RemoteCall::AgentCalls { .. }
             | RemoteCall::Look { .. }
             | RemoteCall::Find { .. }
             | RemoteCall::Who { .. }
@@ -566,6 +587,7 @@ pub enum RemoteReply {
     Agents(AgentsReply),
     AgentLogins(Box<crate::logins::MachineLogins>),
     AgentUsage(Box<crate::usage::UsageReport>),
+    AgentCalls(Box<crate::usage_calls::UsageCallsPage>),
     AgentChangePreview(Box<crate::logins::ChangePreview>),
     AgentLoginChanged(Box<crate::logins::LoginChange>),
     FileRead {

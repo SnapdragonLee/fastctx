@@ -28,6 +28,7 @@ pub mod local;
 pub mod seen;
 
 /// Who asked, and what that lets it see here.
+#[derive(Clone)]
 pub struct Asker {
     pub machine: MachineName,
     pub hub: HubId,
@@ -48,13 +49,14 @@ fn resident_of(call: &RemoteCall) -> Option<&ResidentId> {
         | RemoteCall::Manage { resident: who, .. }
         | RemoteCall::Offers { resident: who }
         | RemoteCall::ItemDetail { resident: who, .. }
-        | RemoteCall::AgentActivity { resident: who, .. }
-        | RemoteCall::Upload {
-            target:
-                fastctx_types::attachments::UploadTarget::Resident { resident: who }
-                | fastctx_types::attachments::UploadTarget::Draft { resident: who, .. },
-            ..
-        } => Some(who),
+        | RemoteCall::AgentActivity { resident: who, .. } => Some(who),
+        RemoteCall::CommitAttachment { attachment, .. } => Some(&attachment.conversation().resident),
+        RemoteCall::Upload { target, .. } | RemoteCall::ReserveAttachment { target, .. } => {
+            match target.conversation_target() {
+                fastctx_types::attachments::UploadTarget::Resident { resident } => Some(resident),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -74,7 +76,13 @@ fn town_of(call: &RemoteCall) -> Option<&TownName> {
         | RemoteCall::PipeOut { origin, .. } => origin.town.as_ref(),
         RemoteCall::PageAction { source, .. } => Some(&source.town),
         RemoteCall::Place { attachment, .. } => attachment.town.as_ref(),
-        RemoteCall::Upload { target: fastctx_types::attachments::UploadTarget::New { town, .. }, .. } => town.as_ref(),
+        RemoteCall::Upload { target, .. } | RemoteCall::ReserveAttachment { target, .. } => {
+            match target.conversation_target() {
+                fastctx_types::attachments::UploadTarget::New { town, .. }
+                | fastctx_types::attachments::UploadTarget::Draft { town, .. } => town.as_ref(),
+                _ => None,
+            }
+        }
         RemoteCall::Manage { action: Management::Move { town: Some(town) }, .. } => Some(town),
         _ => None,
     }
@@ -85,9 +93,12 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
     let here = node.machine();
     // Nothing of a call turned away here ran.
     let refuse = |why: String| Failure::refused(format!("{here} refused {}: {why}", caller.machine));
-    if let RemoteCall::AttachmentThumbnail { attachment, .. } | RemoteCall::ReadAttachment { attachment, .. } = call
-        && !node.is_me(&attachment.owner().machine)
-    {
+    let reached = match call {
+        RemoteCall::AttachmentThumbnail { attachment, .. } => Some(attachment.thumbnail_owner()),
+        RemoteCall::ReadAttachment { attachment, .. } => Some(attachment.owner()),
+        _ => None,
+    };
+    if reached.is_some_and(|owner| !node.is_me(&owner.machine)) {
         return Err(refuse("the attachment names a different holding machine".into()));
     }
     let view = link.view();
@@ -118,13 +129,9 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
     // Which version a machine runs is its owner's to choose, and the
     // network's super administrator's but for a visitor's machine
     // (`world-upgrade.md`, 谁来更新).
-    if matches!(call, RemoteCall::UpdateWorld | RemoteCall::Updates { .. }) {
-        let owner = view.member(&here).and_then(|member| member.home.as_ref());
-        let own = owner == Some(&caller.account);
-        let administers = view.is_super(&caller.account) && owner.is_some_and(|owner| !view.is_visitor(owner));
-        if !own && !administers {
-            return Err(refuse(format!("only {here}'s owner updates it, not the account {}", caller.account)));
-        }
+    if matches!(call, RemoteCall::UpdateWorld | RemoteCall::Updates { .. }) && !view.may_update(&caller.account, &here)
+    {
+        return Err(refuse(format!("only {here}'s owner updates it, not the account {}", caller.account)));
     }
     crate::devices::admit(&view, &caller.machine, call)?;
     let hub = link.membership().id.clone();
@@ -142,15 +149,13 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
     // A conversation's attachments are seen by the accounts it works for
     // alone (`seen`); a draft's, which no conversation holds yet, by whoever
     // may work here.
-    let resident = resident_of(call).or(match call {
-        RemoteCall::AttachmentThumbnail { attachment, .. } | RemoteCall::ReadAttachment { attachment, .. }
-            if !hands || node.residents.knows(&attachment.owner().resident) =>
-        {
-            Some(&attachment.owner().resident)
-        }
-        _ => None,
+    let resident = resident_of(call).or_else(|| {
+        reached.filter(|owner| !hands || node.residents.knows(&owner.resident)).map(|owner| &owner.resident)
     });
     if let Some(resident) = resident {
+        if !node.residents.knows(resident) && matches!(call, RemoteCall::CommitAttachment { .. }) {
+            return Ok(Asker { machine: caller.machine.clone(), hub, account: caller.account.clone(), hands });
+        }
         if !node.residents.knows(resident) {
             return Err(crate::forget::gone(node, resident));
         }

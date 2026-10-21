@@ -75,6 +75,7 @@ __FASTCTX_COMMANDS__
 __FASTCTX_SELECTION__
 __FASTCTX_REWIND__
 __FASTCTX_OBSERVATIONS__
+__FASTCTX_USAGE__
 __FASTCTX_FAILURES__
 
 // /clear may replace even the same session ID. Keep the old object alive for
@@ -652,6 +653,17 @@ async function startedFor($) {
   return typeof named === 'string' && named !== '' ? named : null
 }
 
+// A background session is told to keep scratch files in its job's directory,
+// which exists only on the machine it lives on and only for its owner. The
+// World's `run` keeps them in `$FASTCTX_SCRATCH` on whichever machine a script
+// runs, so the paragraph naming the job's directory goes and one way remains.
+function withoutJobScratch(result) {
+  if (typeof result.text !== 'string') return result
+  const paragraphs = result.text.split('\n\n')
+  const kept = paragraphs.filter((paragraph) => !paragraph.includes('CLAUDE_JOB_DIR'))
+  return kept.length === paragraphs.length ? result : { ...result, text: kept.join('\n\n') }
+}
+
 // The session's directory, reserved by the node, which moves it into its
 // conversation then; the controls wait for it (`reservations`).
 async function reserveDirectory($, context) {
@@ -762,23 +774,6 @@ async function sessionUsage($) {
   }
 }
 
-// The session's figures once a step has ended, when its cost total moved.
-// Claude Code adds each request's cost to that total, priced its own way, as
-// the request ends; read after every step, a long turn is counted, and held
-// to the account's allowances, as it goes rather than only once it ends. A
-// failure here never fails the step.
-async function stepMeasured($, context) {
-  try {
-    const usage = await sessionUsage($)
-    const total = usage?.cost?.usd
-    if (typeof total !== 'number' || total === context.measuredUsd) return
-    context.measuredUsd = total
-    await reports($, context).event('session', { happened: { event: 'changed', turn: null, change: { kind: 'usage', usage } } })
-  } catch (error) {
-    $.ui.log('World step usage: ' + String(error), { to: 'debug' })
-  }
-}
-
 async function startTurn($, context, e, next) {
   // A subagent's run is a turn of its own loop: the main loop's turn, its
   // state and what it takes are untouched (Claude Code reports one since
@@ -828,9 +823,7 @@ async function completeTurn($, context, e, next) {
   // The session's figures as the turn ends reach the node ahead of the end
   // itself, so its ledger and the account's windows stand as the turn left
   // them; what the cost total rose by since the turn began is the turn's.
-  const usage = await sessionUsage($)
-  if (usage) await reports($, context).event('session', { happened: { event: 'changed', turn: null, change: { kind: 'usage', usage } } })
-  if (typeof usage?.cost?.usd === 'number') context.measuredUsd = usage.cost.usd
+  const usage = await stepMeasured($, context, null, true)
   const before = context.spentBefore?.turn === e.turnId ? context.spentBefore.usd : undefined
   const total = usage?.cost?.usd
   const spent = typeof total === 'number' && typeof before === 'number' ? (total >= before ? total - before : total) : null
@@ -967,6 +960,7 @@ async function focus($, context) {
 }
 
 async function session($, registry, id, renew = false) {
+  await usageOrigin($, id)
   let context = registry.sessions.get(id)
   // A start that failed is tried again after a pause rather than kept for
   // the whole session: what failed may have been passing (#48).
@@ -1010,6 +1004,7 @@ export function register(on) {
   // Every handler first steps aside once fastctx is being removed. Each keeps
   // its literal on('…') call, the shape the official loader reads.
   on('session.start', async ($, e, next) => {
+    await usageOrigin($, await $.session.id())
     if (await removed($)) return next(e)
     await worldTools($, registry)
     // The session's directory is reserved before its controls make or
@@ -1038,9 +1033,8 @@ export function register(on) {
     const base = reports($, context)
     const shown = e.agentId === undefined ? context.shown : agentPresentation(context, e.agentId)
     const reported = e.agentId === undefined ? base : agentReports(base, e.agentId)
-    const result = yield* shown.step(reported, input, next)
-    await stepMeasured($, context)
-    return result
+    const held = await heldStep($, context, input)
+    return yield* measuredStep($, context, shown, reported, input, held ?? next, held !== null)
   }).catch(async function* ($, e, next) { return yield* streamWithoutWorld($, 'turn.step', e, next) })
   on('tool.call', async ($, e, next) => {
     if (await removed($)) return next(e)
@@ -1068,7 +1062,9 @@ export function register(on) {
     if (await removed($)) return next(e)
     const context = await route($, registry, 'session.append', e)
     const state = e.agentId === undefined ? await controlBegin($, sessions) : null
-    if (state !== null && state.checkpoints.full !== true) await controlCheckpoint($, state, null, true)
+    // Restoring a fork appends its rows before the new transcript exists.
+    // Reading its boundaries here would wait for this very append to finish.
+    if (state !== null && state.checkpoints.full !== true) await controlCheckpoint($, state, null, false)
     if (state !== null && e.door === 'prompt' && state.busy === false) {
       state.promptCheckpoint = await controlCheckpoint($, state, null, true)
       state.promptUuid = state.lastUuid
@@ -1114,9 +1110,9 @@ export function register(on) {
   }).catch(($, e, next) => continueWithoutWorld($, 'prompt.context', e, next))
   on('prompt.section', async ($, e, next) => {
     if (await removed($)) return next(e)
-    if (!['env_info_simple', 'env_info_static'].includes(e.name)) return next(e)
-    const context = await session($, registry, await $.session.id())
-    return (await sessionPolicy($, context)).assisting ? { text: null } : next(e)
+    // A section's name may carry a variant after a colon; its base names it.
+    if (e.name.split(':')[0] !== 'bg-session' || await startedFor($) === null) return next(e)
+    return withoutJobScratch(await next(e))
   }).catch(($, e, next) => continueWithoutWorld($, 'prompt.section', e, next))
   on('classic.PostModelSwitch', async ($, e, next) => {
     if (await removed($)) return next(e)
@@ -1185,7 +1181,8 @@ export function register(on) {
   on('session.measure', async ($, e, next) => {
     if (await removed($)) return next(e)
     const context = await route($, registry, 'session.measure', e)
-    return context.shown.measure(reports($, context), e, next)
+    await stepMeasured($, context, null, true)
+    return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'session.measure', e, next))
   on('classic.PostToolUse', async ($, e, next) => {
     if (await removed($)) return next(e)
