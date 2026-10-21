@@ -318,6 +318,7 @@ pub(crate) async fn open_account(
         // visitor's: its machines are its own, and it uses what is given
         // to it (`world-network.md`, 超级管理员管什么).
         store.book.directory.accounts.push(Account {
+            id: Some(fastctx_net::ids::new_account_id().map_err(|error| error.to_string())?),
             name: account.clone(),
             level: fastctx_net::directory::Level::Visitor,
             locked: false,

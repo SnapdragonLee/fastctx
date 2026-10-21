@@ -6,8 +6,10 @@ mod adopt;
 mod child;
 mod config;
 mod firewall;
-pub mod managed;
+pub(super) mod guest_channel;
+pub(super) mod guests;
 mod host;
+pub mod managed;
 mod owner;
 mod policy;
 mod renewal;
@@ -130,6 +132,10 @@ pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
             if before.registration.is_none() {
                 scm::create(&config.name, config.target.as_ref().map(|target| target.sid.as_str()))?;
             }
+            {
+                let _guests = FileLock::acquire(&root.join("guests.lock"))?;
+                delete(&root.join("guests-retired"))?;
+            }
             checker.install(&config.name, config.target.as_ref().map(|target| target.sid.as_str()))?;
             scm::enable(&config.name)?;
             scm::start(&config.name)?;
@@ -152,6 +158,7 @@ pub(super) fn uninstall(service: &Service) -> anyhow::Result<Status> {
     security::prepare(&config.name, config.target.as_ref().map(|target| target.sid.as_str()))?;
     let _policy_lock = FileLock::acquire(&root.parent().context("guardian parent is absent")?.join("policy.lock"))?;
     let _lock = FileLock::acquire(&root.join("manager.lock"))?;
+    guests::retire(&config)?;
     let checker = task::Task::new(&config.name);
     transaction::run(
         &root.join("transaction.json"),

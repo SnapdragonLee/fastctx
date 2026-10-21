@@ -1,0 +1,59 @@
+name: Guardian OS boundaries
+on:
+  push:
+    branches: ['ci/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  commandline:
+    name: Process arguments on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm, macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: runner.os == 'macOS'
+        with:
+          python-version: '3.13'
+      - name: Try reading another ordinary account's process on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & scripts/guest-commandline-windows.ps1 *>&1 | Tee-Object -FilePath commandline-boundary.log
+      - name: Try reading another ordinary account's process on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          sudo env GITHUB_ACTIONS=true "$(command -v python)" scripts/guest-commandline-macos.py 2>&1 | tee commandline-boundary.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: commandline-boundary-${{ matrix.os }}
+          path: commandline-boundary.log
+          if-no-files-found: error
+  pam:
+    name: Expired accounts and system schedulers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install scheduler test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y at cron polkitd dbus-user-session
+      - name: Check expired and non-expired accounts
+        run: |
+          set -o pipefail
+          sudo python3 scripts/guest-pam.py 2>&1 | tee pam-boundary.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pam-boundary-ubuntu
+          path: pam-boundary.log
+          if-no-files-found: error

@@ -1,5 +1,5 @@
-//! System units run at boot under an explicit account, without a login or
-//! a lingering user manager. systemd retains exit diagnostics in its journal.
+//! Root guardians start at boot and run nodes under their registered users.
+//! No login or lingering user manager is required; systemd retains diagnostics.
 
 use std::fs;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
@@ -28,6 +28,21 @@ pub(super) fn registrations(installation: &crate::uninstall::Installation) -> an
             continue;
         }
         let stem = name.trim_end_matches(".executable");
+        if let Some(service) = super::unix_guardian::registration(stem)? {
+            if service.kind == super::Kind::Node && service.uid != installation.uid {
+                continue;
+            }
+            let mut artifacts = super::unix_guardian::artifacts(&service)?;
+            artifacts.push(PathBuf::from("/run/lock").join(format!("{stem}.service.lock")));
+            found.push(super::Registration {
+                name: format!("{stem}.service"),
+                kind: service.kind,
+                executable: service.executable,
+                directory: service.directory,
+                artifacts,
+            });
+            continue;
+        }
         let file = entry.path().with_extension("service");
         let text = fs::read_to_string(&file)?;
         let marker = format!("# fastctx service v1: {stem}\n");
@@ -234,13 +249,17 @@ pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
         bail!("the executable and service data directory must exist before installation");
     }
     super::linux_directory::prepare(service)?;
+    let guardian_changed = super::unix_guardian::installed(service)?
+        && !super::unix_guardian::staged(service, &crate::renewal::build()?.digest)?;
+    super::unix_guardian::prepare(service)?;
     let content = definition(service, &reg, version)?;
     transaction::run(
         &reg.file.with_extension("transaction"),
         &reg.marker,
         || capture(&reg),
         |before| {
-            let changed = before.unit.as_deref() != Some(content.as_bytes())
+            let changed = guardian_changed
+                || before.unit.as_deref() != Some(content.as_bytes())
                 || before.executable.as_deref() != Some(service.executable.as_os_str().as_bytes());
             if changed {
                 if before.unit.is_some() {
@@ -256,20 +275,8 @@ pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
             systemctl(&["enable", &reg.name])?;
             systemctl(&["start", &reg.name])?;
             reg.watchdog.start()?;
-            // Its user restarts it on a new release without a password: the
-            // node's own, or whoever installed a hub with sudo. Without the
-            // rule, a renewal waits for an administrator.
-            let served = match service.kind {
-                super::Kind::Node => Some(service.uid),
-                super::Kind::Hub => std::env::var("SUDO_UID").ok().and_then(|uid| uid.parse().ok()),
-            };
-            if let Some(uid) = served
-                && let Err(error) = super::linux_restart::allow(&reg.id, uid)
-            {
-                eprintln!(
-                    "fastctx: automatic service restart was not authorized: {error:#}; a renewal will need an administrator"
-                );
-            }
+            // The authenticated guardian now owns restarts; the previous sudo rule grants no additional access.
+            super::linux_restart::forbid(&reg.id)?;
             reg.status(true)
         },
         |before| restore(&reg, before),
@@ -278,7 +285,7 @@ pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
 
 /// The running manager's version, not an upgraded client's: the unit is
 /// written for what it reads (`definition`).
-fn manager_version() -> anyhow::Result<u32> {
+pub(super) fn manager_version() -> anyhow::Result<u32> {
     let output = checked(Command::new("busctl").args([
         "--system",
         "get-property",
@@ -385,6 +392,7 @@ fn restore(reg: &Registration, before: &Before) -> anyhow::Result<()> {
 }
 
 pub(super) fn uninstall(service: &Service) -> anyhow::Result<Status> {
+    super::unix_guardian::retire_guests(service)?;
     let reg = Registration::new(service);
     let _lock = FileLock::acquire(&PathBuf::from("/run/lock").join(format!("{}.lock", reg.name)))?;
     transaction::run(
@@ -402,6 +410,7 @@ pub(super) fn uninstall(service: &Service) -> anyhow::Result<Status> {
             super::linux_restart::forbid(&reg.id)?;
             reg.watchdog.delete()?;
             systemctl(&["daemon-reload"])?;
+            super::unix_guardian::forget(service)?;
             reg.status(false)
         },
         |before| restore(&reg, before),
@@ -420,11 +429,10 @@ pub(super) fn systemctl(args: &[&str]) -> anyhow::Result<String> {
 fn definition(service: &Service, reg: &Registration, version: u32) -> anyhow::Result<String> {
     // The node owns its ordinary children; independently supervised world
     // jobs must survive a foreground restart or an idle identity handoff.
-    let args = std::iter::once(reg.executable.as_os_str())
-        .chain(service.arguments().iter().map(|arg| arg.as_os_str()))
-        .map(word)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let image = super::unix_guardian::artifacts(service)?[0].join("fastctx");
+    let arguments: Vec<std::ffi::OsString> =
+        vec![image.into_os_string(), "guardian".into(), "serve".into(), "--name".into(), reg.id.clone().into()];
+    let args = arguments.iter().map(|arg| word(arg)).collect::<Vec<_>>().join(" ");
     let (start, args) = if version >= 249 { (":", args) } else { ("", args.replace("\\x24", "$$")) };
     let mut unit = format!("{}[Unit]\nDescription=fastctx {}\n", reg.marker, service.role());
     if version >= 230 {
@@ -437,9 +445,9 @@ fn definition(service: &Service, reg: &Registration, version: u32) -> anyhow::Re
     if version < 230 {
         unit.push_str("StartLimitInterval=0\n");
     }
+    let kill_mode = if service.kind == super::Kind::Hub { "control-group" } else { "process" };
     unit.push_str(&format!(
-        "User={}\nExecStart={start}{args}\nRestart=always\nRestartSec=0\nKillMode=process\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\n",
-        service.uid
+        "User=0\nExecStart={start}{args}\nRestart=always\nRestartSec=1\nKillMode={kill_mode}\nStandardInput=null\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=multi-user.target\n"
     ));
     Ok(unit)
 }
@@ -497,4 +505,44 @@ fn word(value: &std::ffi::OsStr) -> String {
     }
     result.push('"');
     result
+}
+
+/// Re-registers only definitions written by Fastctx, using this dpkg-approved image.
+pub(super) fn upgrade_installed() -> anyhow::Result<()> {
+    for entry in super::inventory::entries(std::path::Path::new("/etc/systemd/system"))? {
+        let name = entry.file_name();
+        let Some(name) =
+            name.to_str().filter(|name| name.starts_with("fastctx-service-") && name.ends_with(".executable"))
+        else {
+            continue;
+        };
+        let stem = name.trim_end_matches(".executable");
+        if let Some(service) = super::unix_guardian::registration(stem)? {
+            service.install()?;
+            continue;
+        }
+        let text = fs::read_to_string(entry.path().with_extension("service"))?;
+        anyhow::ensure!(
+            text.starts_with(&format!("# fastctx service v1: {stem}\n")),
+            "unrecognized service definition"
+        );
+        let uid: u32 =
+            text.lines().find_map(|line| line.strip_prefix("User=")).context("service has no UID")?.parse()?;
+        let args = text
+            .lines()
+            .find_map(|line| line.strip_prefix("ExecStart=:").or_else(|| line.strip_prefix("ExecStart=")))
+            .context("service has no command")?;
+        let args = unquote(args)?;
+        let kind = match args.get(1).and_then(|word| word.to_str()) {
+            Some("node") => super::Kind::Node,
+            Some("hub") => super::Kind::Hub,
+            _ => anyhow::bail!("unrecognized service role"),
+        };
+        let at = args.iter().position(|arg| arg == "--dir").context("service has no directory")?;
+        let directory = PathBuf::from(args.get(at + 1).context("service directory is absent")?);
+        let service = Service { uid, ..Service::new(kind, fs::read_link(entry.path())?, directory) };
+        anyhow::ensure!(service.id(&uid.to_le_bytes()) == stem, "service registration identity differs");
+        service.install()?;
+    }
+    Ok(())
 }

@@ -102,6 +102,8 @@ impl RemoteCall {
     /// What this call is (`Contract`).
     pub fn contract(&self) -> Contract {
         match self {
+            Self::HomePrivacy { harden: false } => Contract::QUERY,
+            Self::HomePrivacy { harden: true } => Contract::CHANGE,
             Self::Mcp { mcp: crate::mcp::MachineCall::Status { .. } | crate::mcp::MachineCall::Found } => {
                 Contract::QUERY
             }
@@ -136,6 +138,7 @@ impl RemoteCall {
             | Self::PreviewAgentChange { .. }
             | Self::ReadAgentLimits { .. }
             | Self::AgentUsage { .. }
+            | Self::AgentCalls { .. }
             | Self::Offers { .. }
             | Self::Lines { request: Lines::Find { .. } } => Contract::ASKS_AGENT,
             Self::Composer { .. }
@@ -240,6 +243,8 @@ impl Call {
     /// (`Leaving`).
     pub fn on_leaving(&self) -> Leaving {
         match self {
+            Self::HomePrivacy { harden: false, .. } => Leaving::Stop,
+            Self::HomePrivacy { harden: true, .. } => Leaving::Finish,
             Self::McpRelay { .. }
             | Self::MachineLog { .. }
             | Self::CollabRead { .. }
@@ -269,6 +274,7 @@ impl Call {
             | Self::PreviewAgentChange { .. }
             | Self::ReadAgentLimits { .. }
             | Self::AgentUsage { .. }
+            | Self::AgentCalls { .. }
             | Self::Look { .. }
             | Self::Watch { .. }
             | Self::Offers { .. }

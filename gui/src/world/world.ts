@@ -3,6 +3,7 @@
 // `::world`). These are serialized replies, before any presentation model.
 
 import type { AccountName, Acting, HubId, HubName, Rights } from "./accounts";
+import type { GuestPrincipal } from "./guests";
 import type { Speaker, TurnEnd } from "./events";
 import type { PageSource, PageSummary } from "./pages";
 import type { Focus } from "./focus";
@@ -27,6 +28,7 @@ export interface About {
   model: string | null;
   /** Whom it works for: this computer's logins, or these accounts. */
   acting: Acting;
+  principals?: GuestPrincipal[];
   /** The machines and folders the user points it at. */
   focus?: Focus;
   /** The MCP servers of the account it works for that it starts without

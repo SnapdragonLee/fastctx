@@ -30,6 +30,7 @@ mod data;
 mod direct;
 pub mod dissolve;
 mod forget;
+mod guest_accounts;
 mod health;
 mod ledger;
 mod log;
@@ -116,6 +117,7 @@ pub fn init(dir: &Path, new: New) -> anyhow::Result<CertPin> {
     let record = password_record(&secrets, &new.admin, &new.password)?;
     let mut book = Book::default();
     book.directory.accounts.push(Account {
+        id: Some(fastctx_net::ids::new_account_id()?),
         name: new.admin.clone(),
         level: fastctx_net::directory::Level::Super,
         locked: false,

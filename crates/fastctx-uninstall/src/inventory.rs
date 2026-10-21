@@ -104,19 +104,31 @@ pub fn preview(mut installation: Installation, everything: bool) -> anyhow::Resu
         crate::claude_cache::include_steps(&mut request);
         crate::claude_work_cache::include_steps(&mut request)?;
         crate::claude_session_cache::include_steps(&mut request)?;
-        let marker = fastctx_types::layout::WorldDir::under(&request.installation.root).node_service();
-        if marker.try_exists()?
-            && !request.steps.iter().any(|step| matches!(&step.action, Action::Delete(path) if path == &marker))
-        {
-            let item = Item {
-                id: "node-service-marker".into(),
-                kind: "service".into(),
-                what: "Remove the node's boot-service marker".into(),
-                location: Some(marker.display().to_string()),
-                admin: false,
-            };
-            request.plan.steps.push(item.clone());
-            request.steps.push(Step { item, action: Action::Delete(marker) });
+        for (marker, id, what) in [
+            (
+                fastctx_types::layout::WorldDir::under(&request.installation.root).node_service(),
+                "node-service-marker",
+                "Remove the node's boot-service marker",
+            ),
+            (
+                request.installation.root.join(fastctx_install::guest_privacy::MARKER),
+                "guest-accounts-marker",
+                "Retire the guest-account privacy marker after system cleanup",
+            ),
+        ] {
+            if marker.try_exists()?
+                && !request.steps.iter().any(|step| matches!(&step.action, Action::Delete(path) if path == &marker))
+            {
+                let item = Item {
+                    id: id.into(),
+                    kind: "service".into(),
+                    what: what.into(),
+                    location: Some(marker.display().to_string()),
+                    admin: false,
+                };
+                request.plan.steps.push(item.clone());
+                request.steps.push(Step { item, action: Action::Delete(marker) });
+            }
         }
         return Ok(request);
     }
@@ -302,6 +314,16 @@ pub fn preview(mut installation: Installation, everything: bool) -> anyhow::Resu
             world.node_service().display().to_string(),
             false,
             Action::Delete(world.node_service()),
+        );
+    }
+    let guests_marker = root.join(fastctx_install::guest_privacy::MARKER);
+    if guests_marker.try_exists()? {
+        add(
+            "service",
+            "Retire the guest-account privacy marker after system cleanup",
+            guests_marker.display().to_string(),
+            false,
+            Action::Delete(guests_marker),
         );
     }
     let path_location =

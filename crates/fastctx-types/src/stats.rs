@@ -194,6 +194,9 @@ pub struct NodeSeen {
     /// Whether a system service keeps it running.
     #[serde(default)]
     pub service: bool,
+    /// The privileged service, including the one-time headless installation command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian: Option<Guardian>,
     /// What of its work has gone on too long, as it last looked at itself
     /// (`world-concurrency.md`, 节点看着自己).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -220,4 +223,23 @@ pub struct StuckWork {
     pub what: String,
     /// For how long, in seconds.
     pub seconds: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Guardian {
+    pub installed: bool,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<String>,
+}
+
+/// Directory permission facts for the owner's explicit privacy action. This
+/// describes its access list, not an attempted read by an arbitrary account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomePrivacy {
+    pub directory: Option<std::path::PathBuf>,
+    pub owner_only: Option<bool>,
+    pub reason: Option<String>,
 }

@@ -976,6 +976,12 @@ pub(crate) async fn handle(node: &Arc<Node>, peer: &Peer, call: Call) -> Result<
                 .await
                 .map(|logins| Reply::MachineAgentLogins(Box::new(logins)))
         }
+        Call::AgentCalls { machine, agent, dir, query } => {
+            users_voice(node, peer)?;
+            crate::logins::remote::calls(node, machine, agent, dir, query)
+                .await
+                .map(|page| Reply::AgentCalls(Box::new(page)))
+        }
         Call::AgentUsage { machine, agent, dir } => {
             users_voice(node, peer)?;
             crate::logins::remote::usage(node, machine, agent, dir)
@@ -990,6 +996,11 @@ pub(crate) async fn handle(node: &Arc<Node>, peer: &Peer, call: Call) -> Result<
             users_voice(node, peer)?;
             let acting = crate::around::acting_of(node, &caller::of(node, peer)?);
             crate::focus::folders(node, &acting, machine, path).await.map(Reply::Folders)
+        }
+        Call::HomePrivacy { machine, harden } => {
+            users_voice(node, peer)?;
+            let acting = crate::around::acting_of(node, &caller::of(node, peer)?);
+            crate::guests::privacy(node, &acting, machine, harden).await.map(Reply::HomePrivacy)
         }
         Call::Stats { machine, after } => {
             users_voice(node, peer)?;
@@ -1368,7 +1379,21 @@ async fn run(
     call_id: Option<&str>,
 ) -> Result<RunReply, Failure> {
     request.call_id = call_id.map(str::to_owned);
-    let (goes_to, request) = crate::here::start(node, request);
+    let dispatched = if crate::here::assisting(node, &resident) {
+        crate::here::transition(node, request)
+    } else {
+        Ok(crate::here::start(node, request))
+    };
+    let (goes_to, request) = match dispatched {
+        Ok(dispatched) => dispatched,
+        Err(error) => {
+            if let Some(id) = call_id {
+                crate::run_facts::record_failure(node, &resident, id, &error.message)
+                    .map_err(|error| Failure::new(format!("recording tool call facts: {error}")))?;
+            }
+            return Err(error);
+        }
+    };
     let machine = goes_to.as_ref().map(|place| place.name.clone()).unwrap_or_else(|| node.machine());
     if let Some(id) = call_id {
         crate::run_facts::begin_for(node, &resident, id, machine)
@@ -1435,7 +1460,7 @@ async fn run_started(
 
 /// Why a script of an agent assisting another account did not run: it
 /// named the computer the agent runs on, which it may not work on, or it
-/// was not a single `on` (`world-run.md`, 这里).
+/// was not literal `on`s alone (`world-guest-accounts.md`, 还没装上看护的机器).
 fn assisting_refusal(node: &Node, script: &str) -> String {
     match crate::here::single_on(script) {
         Some((machine, _)) if node.is_here(&machine) => fastctx_hands::assist::here_refused(&machine.to_string()),

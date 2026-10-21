@@ -381,6 +381,19 @@ impl World {
 
     /// What a login on a machine was used for, as this computer's user may
     /// see it.
+    pub async fn agent_calls(
+        &self,
+        machine: fastctx_types::MachineName,
+        agent: fastctx_types::AgentName,
+        dir: std::path::PathBuf,
+        query: fastctx_types::usage_calls::UsageCallsQuery,
+    ) -> Result<fastctx_types::usage_calls::UsageCallsPage, crate::Error> {
+        match self.ask(Call::AgentCalls { machine, agent, dir, query }).await? {
+            Reply::AgentCalls(page) => Ok(*page),
+            other => Err(unexpected(other)),
+        }
+    }
+
     pub async fn agent_usage(
         &self,
         machine: MachineName,
@@ -757,6 +770,18 @@ impl World {
     ) -> Result<fastctx_types::stats::MachineStats, Error> {
         match self.ask(Call::Stats { machine, after }).await? {
             Reply::Stats(stats) => Ok(*stats),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Inspect the owner's home; tighten its permissions only when requested.
+    pub async fn home_privacy(
+        &self,
+        machine: Option<MachineName>,
+        harden: bool,
+    ) -> Result<fastctx_types::stats::HomePrivacy, Error> {
+        match self.ask(Call::HomePrivacy { machine, harden }).await? {
+            Reply::HomePrivacy(privacy) => Ok(privacy),
             other => Err(unexpected(other)),
         }
     }

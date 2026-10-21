@@ -260,6 +260,12 @@ pub enum RemoteCall {
         agent: AgentName,
         dir: std::path::PathBuf,
     },
+    /// Up to one hundred request records, newest first, redacted for this reader.
+    AgentCalls {
+        agent: AgentName,
+        dir: std::path::PathBuf,
+        query: crate::usage_calls::UsageCallsQuery,
+    },
     /// The documents of a canon there, for a town's map.
     Canon {
         path: String,
@@ -406,6 +412,9 @@ pub enum RemoteCall {
     /// that may work on it (`crate::stats`). With `after`, its lines bring
     /// only the round trips and changes since then: a page that asks every
     /// few seconds keeps what it was told.
+    HomePrivacy {
+        harden: bool,
+    },
     Stats {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<jiff::Timestamp>,
@@ -493,7 +502,8 @@ impl RemoteCall {
             | RemoteCall::ChangeAgentLogin { .. }
             | RemoteCall::UpdateWorld
             | RemoteCall::Updates { .. }
-            | RemoteCall::Stats { .. } => Purpose::Hands,
+            | RemoteCall::Stats { .. }
+            | RemoteCall::HomePrivacy { .. } => Purpose::Hands,
             RemoteCall::Composer { .. }
             | RemoteCall::AttachmentThumbnail { .. }
             | RemoteCall::ReadAttachment { .. }
@@ -512,6 +522,7 @@ impl RemoteCall {
             | RemoteCall::AgentLogins
             | RemoteCall::ReadAgentLimits { .. }
             | RemoteCall::AgentUsage { .. }
+            | RemoteCall::AgentCalls { .. }
             | RemoteCall::Look { .. }
             | RemoteCall::Find { .. }
             | RemoteCall::Who { .. }
@@ -566,6 +577,7 @@ pub enum RemoteReply {
     Agents(AgentsReply),
     AgentLogins(Box<crate::logins::MachineLogins>),
     AgentUsage(Box<crate::usage::UsageReport>),
+    AgentCalls(Box<crate::usage_calls::UsageCallsPage>),
     AgentChangePreview(Box<crate::logins::ChangePreview>),
     AgentLoginChanged(Box<crate::logins::LoginChange>),
     FileRead {
@@ -609,6 +621,7 @@ pub enum RemoteReply {
     Set,
     Facts(MachineFacts),
     Stats(Box<crate::stats::MachineStats>),
+    HomePrivacy(crate::stats::HomePrivacy),
     /// How updates stand on that machine after it was asked to update.
     Update(Box<crate::update::State>),
     Interfaces {

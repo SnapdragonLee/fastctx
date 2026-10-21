@@ -134,12 +134,51 @@ fn powershell(script: &str) -> anyhow::Result<String> {
     );
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>());
-    let root = std::env::var_os("SystemRoot").context("Windows did not supply SystemRoot")?;
-    checked(Command::new(PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe")).args([
+    use std::os::windows::ffi::OsStringExt as _;
+    let mut directory = vec![0; 32768];
+    let length = unsafe {
+        windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(
+            directory.as_mut_ptr(),
+            directory.len() as u32,
+        )
+    } as usize;
+    anyhow::ensure!(length != 0 && length < directory.len(), "Windows did not supply its system directory");
+    let root = PathBuf::from(std::ffi::OsString::from_wide(&directory[..length]));
+    checked(Command::new(root.join("WindowsPowerShell/v1.0/powershell.exe")).args([
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
         "-EncodedCommand",
         &encoded,
     ]))
+}
+
+/// Withdraw every task whose native principal is this guest, including hidden
+/// tasks in nested folders. Task names and actions are never evaluated as code.
+pub(super) fn delete_for_guest(sid: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        sid.starts_with("S-1-5-21-") && sid.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-' || byte == b'S'),
+        "invalid guest SID"
+    );
+    powershell(&format!(
+        r#"
+$guest='{sid}'
+$scheduler=New-Object -ComObject 'Schedule.Service'
+$scheduler.Connect()
+function ClearGuestTasks($folder) {{
+    foreach($task in @($folder.GetTasks(1))) {{
+        $principal=$task.Definition.Principal.UserId
+        if([string]::IsNullOrEmpty($principal)){{continue}}
+        if($principal -notmatch '^S-1-') {{
+            try {{$principal=(New-Object System.Security.Principal.NTAccount($principal)).Translate([System.Security.Principal.SecurityIdentifier]).Value}}
+            catch [System.Security.Principal.IdentityNotMappedException] {{continue}}
+        }}
+        if($principal -eq $guest){{$task.Enabled=$false;$task.Stop(0);$folder.DeleteTask($task.Name,0)}}
+    }}
+    foreach($child in @($folder.GetFolders(0))){{ClearGuestTasks $child}}
+}}
+ClearGuestTasks ($scheduler.GetFolder('\'))
+"#
+    ))?;
+    Ok(())
 }

@@ -528,6 +528,8 @@ pub enum CallStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Question {
+    /// This authenticated member finished deleting the listed guest identities.
+    GuestAccountsDeleted { ids: Vec<fastctx_types::guest::AccountId> },
     /// Machine-layer history visible to this member in `account`, newest
     /// first and strictly before the cursor when supplied.
     MachineLog { account: AccountName, before: Option<u64> },

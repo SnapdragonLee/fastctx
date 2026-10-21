@@ -60,9 +60,9 @@ pub(super) fn run(
     sender: SyncSender<Event>,
     ready: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
-    if config.target.is_some() {
-        account::enable_privileges()?;
-    }
+    account::enable_privileges()?;
+    super::guest_channel::start(config.clone())?;
+    super::guests::maintain(config.clone());
     let mut log = RollingLog::open(&config.root()?.join("guardian.log"))?;
     let mut active: Option<Node> = None;
     let mut candidate: Option<Node> = None;

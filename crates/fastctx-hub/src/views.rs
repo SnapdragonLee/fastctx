@@ -130,6 +130,11 @@ pub(crate) fn view_for(
         })
         .collect();
     View {
+        guest_accounts: true,
+        deleted_guest_accounts: all
+            .member(me)
+            .map(|member| store.book.guest_accounts.pending(&member.key))
+            .unwrap_or_default(),
         machine_log: true,
         hub: store.hub.id.clone(),
         hub_name: store.hub.name.clone(),
@@ -253,7 +258,11 @@ fn cut(all: &Directory, me: &MachineName, mine: &BTreeSet<AccountName>) -> Direc
 /// it checks a call naming a project against. The super administrator's
 /// machine gets no others; and of these, its people are shown only their
 /// own accounts' (`world-network.md`, 项目也照同一个规矩).
-fn projects_for(all: &Directory, me: &MachineName, mine: &BTreeSet<AccountName>) -> Vec<fastctx_net::directory::Project> {
+fn projects_for(
+    all: &Directory,
+    me: &MachineName,
+    mine: &BTreeSet<AccountName>,
+) -> Vec<fastctx_net::directory::Project> {
     let users = users_of(all, me);
     let concerned = |account: &AccountName| mine.contains(account) || users.contains(account);
     all.projects

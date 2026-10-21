@@ -40,9 +40,36 @@ pub fn keep_connected(places: &Places) -> anyhow::Result<(Kept, Report)> {
         return Ok((Kept::Unsupported, Report::default()));
     }
     let (executable, report) = place_executable(places)?;
-    // A macOS node is a LaunchAgent of the user's own, installed as the user.
-    if cfg!(target_os = "macos") || fastctx_platform::elevation::is_elevated()? {
+    #[cfg(target_os = "macos")]
+    if !fastctx_platform::elevation::is_elevated()? {
+        let service = Service::new(Kind::Node, &executable, &places.root);
+        if !super::guardian::status(&service).installed {
+            let args: Vec<std::ffi::OsString> = vec![
+                "guardian".into(),
+                "install".into(),
+                "--dir".into(),
+                places.root.clone().into_os_string(),
+                "--uid".into(),
+                service.uid.to_string().into(),
+            ];
+            match fastctx_platform::elevation::run_elevated(&executable, &args) {
+                Ok(0) => {}
+                Ok(code) => anyhow::bail!("installing the guardian failed (exit {code})"),
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Ok((Kept::Declined, report));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        service.install()?;
+        return Ok((Kept::Installed, report));
+    }
+    if fastctx_platform::elevation::is_elevated()? {
         Service::new(Kind::Node, &executable, &places.root).install()?;
+        return Ok((Kept::Installed, report));
+    }
+    #[cfg(target_os = "linux")]
+    if super::unix_guardian::package::enroll(&Service::new(Kind::Node, &executable, &places.root))? {
         return Ok((Kept::Installed, report));
     }
     Ok((elevated("install", &places.root, &executable)?, report))
@@ -69,7 +96,7 @@ pub fn stop_keeping(places: &Places) -> anyhow::Result<Released> {
         return Ok(Released::NotKept);
     }
     let executable = places.installed();
-    if cfg!(target_os = "macos") || fastctx_platform::elevation::is_elevated()? {
+    if fastctx_platform::elevation::is_elevated()? {
         Service::new(Kind::Node, &executable, &places.root).uninstall()?;
         return Ok(Released::Removed);
     }
@@ -109,7 +136,7 @@ fn elevated(action: &str, root: &Path, executable: &Path) -> anyhow::Result<Kept
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn elevated(action: &str, root: &Path, executable: &Path) -> anyhow::Result<Kept> {
     use std::os::unix::fs::MetadataExt;
     let uid = std::fs::metadata(root)?.uid();
@@ -124,4 +151,27 @@ fn elevated(action: &str, root: &Path, executable: &Path) -> anyhow::Result<Kept
 /// Where a World's marker of its service lives.
 pub(super) fn marker(directory: &Path) -> PathBuf {
     WorldDir::under(directory).node_service()
+}
+
+#[cfg(target_os = "macos")]
+fn elevated(action: &str, root: &Path, executable: &Path) -> anyhow::Result<Kept> {
+    use std::os::unix::fs::MetadataExt as _;
+    let uid = std::fs::metadata(root)?.uid();
+    let args: Vec<std::ffi::OsString> = vec![
+        "service".into(),
+        "node".into(),
+        action.into(),
+        "--dir".into(),
+        root.into(),
+        "--executable".into(),
+        executable.into(),
+        "--uid".into(),
+        uid.to_string().into(),
+    ];
+    match fastctx_platform::elevation::run_elevated(executable, &args) {
+        Ok(0) => Ok(Kept::Installed),
+        Ok(code) => anyhow::bail!("the node service {action} failed (exit {code})"),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok(Kept::Declined),
+        Err(error) => Err(error.into()),
+    }
 }

@@ -87,6 +87,7 @@ pub fn migrate(from: &Path, to: &Path, new: Migrated) -> anyhow::Result<Report> 
     let secrets = HubSecrets::generate();
     let mut book = Book::default();
     book.directory.accounts.push(Account {
+        id: Some(fastctx_net::ids::new_account_id()?),
         name: new.admin.clone(),
         level: fastctx_net::directory::Level::Super,
         locked: false,

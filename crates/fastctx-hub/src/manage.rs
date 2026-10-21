@@ -276,6 +276,7 @@ fn apply(
             directory.assists.retain(|existing| !existing.same(&assist));
             if assisting {
                 directory.assists.push(assist);
+                store.book.guest_accounts.observe(&store.book.directory);
             }
             Ok(Told::Done)
         }
@@ -440,6 +441,7 @@ fn apply(
                 return Err(format!("the account {name} exists already"));
             }
             store.book.directory.accounts.push(Account {
+                id: Some(fastctx_net::ids::new_account_id().map_err(|error| error.to_string())?),
                 name,
                 level: if visitor { Level::Visitor } else { Level::Member },
                 locked: false,
@@ -691,7 +693,10 @@ fn apply(
             let position = projects.iter().position(|project| project.town == town);
             let position = position.ok_or_else(|| format!("there is no project {town}"))?;
             if projects[position].owner != *account {
-                return Err(format!("the project {} is the account {}'s", projects[position].name, projects[position].owner));
+                return Err(format!(
+                    "the project {} is the account {}'s",
+                    projects[position].name, projects[position].owner
+                ));
             }
             // Its ledger goes once the directory without it is kept
             // (`change`).
@@ -997,6 +1002,8 @@ fn delete_account(
             "{name} is the hub's super administrator and cannot be deleted; hand that to another account first"
         ));
     }
+    store.book.guest_accounts.retire(&store.hub.id, &store.book.directory, name)?;
+    let directory = &store.book.directory;
     let reason = format!("the account {name} was deleted");
     let machines: Vec<MachineName> = directory
         .members

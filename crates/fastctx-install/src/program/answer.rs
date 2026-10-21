@@ -18,7 +18,11 @@ use std::os::windows::io::{AsRawHandle as _, OwnedHandle as OwnedPipe};
 const ANSWERS_WITHIN: Duration = Duration::from_secs(120);
 
 pub(super) fn answer(command: &mut Command, path: &Path) -> anyhow::Result<Output> {
-    let deadline = Instant::now() + ANSWERS_WITHIN;
+    within(command, path, ANSWERS_WITHIN)
+}
+
+pub(super) fn within(command: &mut Command, path: &Path, limit: Duration) -> anyhow::Result<Output> {
+    let deadline = Instant::now() + limit;
     let mut child = command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let result = (|| {
         let mut stdout = Pipe::new(child.stdout.take().context("program stdout was not piped")?)?;
@@ -28,7 +32,7 @@ pub(super) fn answer(command: &mut Command, path: &Path) -> anyhow::Result<Outpu
                 Instant::now() < deadline,
                 "{} did not answer within {} seconds",
                 path.display(),
-                ANSWERS_WITHIN.as_secs()
+                limit.as_secs()
             );
             let out = stdout.read().context("reading program stdout")?;
             let err = stderr.read().context("reading program stderr")?;

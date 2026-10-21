@@ -87,6 +87,12 @@ pub fn fixtures() -> Fixtures {
             version: "1.0.0".into(),
             started: at("2026-10-12T22:01:00Z"),
             service: true,
+            guardian: Some(fastctx_types::stats::Guardian {
+                installed: true,
+                running: true,
+                reason: None,
+                install: None,
+            }),
             stuck: Vec::new(),
             refused: None,
         },
@@ -122,6 +128,12 @@ pub fn fixtures() -> Fixtures {
             version: "1.0.0".into(),
             started: at("2026-10-01T00:00:00Z"),
             service: false,
+            guardian: Some(fastctx_types::stats::Guardian {
+                installed: false,
+                running: false,
+                reason: None,
+                install: Some("sudo fastctx guardian install".into()),
+            }),
             stuck: Vec::new(),
             refused: Some(fastctx_types::stats::Refused {
                 path: "/Users/me/Desktop".into(),

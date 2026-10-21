@@ -39,6 +39,9 @@ pub async fn control(node: &Arc<Node>, resident: &ResidentId, control: Control) 
     match control {
         Control::Fork { through } => super::fork::fork(node, resident, through).await,
         Control::Answer { request, answer } => answer_request(node, resident, request, answer).await,
+        Control::Rewind { .. } if cannot_replace_prefix(node, resident) => Err(Failure::new(
+            "This Claude Code skips a plugin's own compaction handler, so rewind cannot keep the chosen turns; fork through the selected turn instead",
+        )),
         Control::Rewind { from } => {
             super::history::wait_stored(
                 node,
@@ -269,6 +272,14 @@ pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, F
             ..Default::default()
         }
     };
+    if cannot_replace_prefix(node, resident) {
+        offers.controls.retain(|control| *control != ControlKind::Rewind);
+        if let Some(points) = &mut offers.checkpoints {
+            for point in points {
+                point.rewind = false;
+            }
+        }
+    }
     if about.session.is_some() && super::command(node, about.home.as_deref()).is_ok() {
         offers.controls.push(ControlKind::Fork);
     }
@@ -277,6 +288,19 @@ pub async fn offers(node: &Arc<Node>, resident: &ResidentId) -> Result<Offers, F
         offers.controls.push(ControlKind::Answer);
     }
     Ok(offers)
+}
+
+/// The first Claude Code that skips a plugin's own `session.compact` handler
+/// when the plugin compacts, so a rewind would run the model's compaction
+/// instead of replacing the prefix (seen in 2.1.303).
+const SKIPS_OWN_COMPACTION: &str = "2.1.303";
+
+/// A version it cannot read is taken for a later one.
+fn cannot_replace_prefix(node: &Node, resident: &ResidentId) -> bool {
+    let skips = fastctx_types::update::release(SKIPS_OWN_COMPACTION).expect("a release version");
+    node.residents.about(resident).is_some_and(|(about, _)| {
+        fastctx_types::update::release(&about.host.version).is_none_or(|version| version >= skips)
+    })
 }
 
 fn live_host(node: &Node, resident: &ResidentId) -> Result<(PathBuf, Host), Failure> {

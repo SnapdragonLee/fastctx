@@ -843,7 +843,7 @@ pub async fn open_here(
         crate::town::project::spans_here(node, town).await?;
     }
     let (id, _opening) = crate::attachments::opening(node, &agent, town.as_ref(), &attachments).await?;
-    let _birth = crate::here::born(node, &id, opened.acting.clone());
+    let _birth = crate::here::born(node, &id, opened.acting.clone())?;
     let origin = Origin::User;
     crate::session_options::keep(node, &id, &options)?;
     // What it is told of its machines and folders goes into the instructions
@@ -857,6 +857,7 @@ pub async fn open_here(
     let (thread, model) = node.codex.home(opened.home.as_deref())?.start_thread(spec).await.map_err(Failure::new)?;
     let born_at = Timestamp::now();
     let about = About {
+        principals: _birth.principals(),
         mcp_off: options.mcp_off.clone(),
         id: id.clone(),
         host: Host { agent, client: "codex app-server".to_string(), version: String::new() },

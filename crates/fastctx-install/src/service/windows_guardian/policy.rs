@@ -99,3 +99,32 @@ fn check(status: i32) -> anyhow::Result<()> {
         Ok(())
     }
 }
+
+/// Only guardian-created guest SIDs may reach this function.
+pub(super) fn guest(sid: &str) -> anyhow::Result<()> {
+    let account = Account::open(sid)?;
+    for name in [
+        "SeBatchLogonRight",
+        "SeDenyInteractiveLogonRight",
+        "SeDenyRemoteInteractiveLogonRight",
+        "SeDenyNetworkLogonRight",
+    ] {
+        let mut text: Vec<u16> = name.encode_utf16().collect();
+        let right = LSA_UNICODE_STRING {
+            Length: (text.len() * 2) as u16,
+            MaximumLength: (text.len() * 2) as u16,
+            Buffer: text.as_mut_ptr(),
+        };
+        check(unsafe { LsaAddAccountRights(account.policy, account.sid, &right, 1) })?;
+    }
+    Ok(())
+}
+
+pub(super) fn delete_guest(sid: &str) -> anyhow::Result<()> {
+    let account = Account::open(sid)?;
+    let status = unsafe { LsaRemoveAccountRights(account.policy, account.sid, true, ptr::null(), 0) };
+    if unsafe { LsaNtStatusToWinError(status) } == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    check(status)
+}

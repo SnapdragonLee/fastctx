@@ -1,8 +1,12 @@
-//! The stable program supplies the node and everything it starts.
+//! A node retains its protected service image or the ordinary stable World program.
 
 use std::path::{Path, PathBuf};
 
 pub(crate) fn prepare(root: &Path) -> anyhow::Result<PathBuf> {
+    let current = std::env::current_exe()?;
+    if fastctx_install::service::guardian::is_program(root, &current)? {
+        return Ok(current);
+    }
     let program = fastctx_install::executable::installed_path(root);
     anyhow::ensure!(
         std::fs::canonicalize(std::env::current_exe()?)? == std::fs::canonicalize(&program)?,

@@ -124,3 +124,9 @@ pub(crate) fn command(path: &Path) -> Command {
     }
     command
 }
+
+/// Service-manager commands have one minute for both exit and complete output.
+pub(crate) fn service_answer(command: &mut Command) -> anyhow::Result<std::process::Output> {
+    let program = PathBuf::from(command.get_program());
+    answer::within(command, &program, std::time::Duration::from_secs(60))
+}

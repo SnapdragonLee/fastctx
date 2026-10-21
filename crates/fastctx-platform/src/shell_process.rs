@@ -59,7 +59,8 @@ pub fn spawn(
         return Err(io::Error::last_os_error());
     }
     let token = Handle::new(token)?;
-    if crate::windows_user::token_user_sid(token.0)? != crate::windows_user::current_user_sid()?
+    if crate::windows_user::token_user_sid(unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(token.0) })?
+        != crate::windows_user::current_user_sid()?
         || session(pid)? != session(unsafe { GetCurrentProcessId() })?
     {
         return Err(io::Error::new(

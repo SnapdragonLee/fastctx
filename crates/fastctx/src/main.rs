@@ -15,6 +15,7 @@ mod claude_session_directory;
 mod copy;
 mod data;
 mod first_program;
+mod guardian;
 mod host_change;
 mod hub_intake;
 mod hub_retire;
@@ -163,6 +164,9 @@ enum Command {
     Renew(renew::RenewalArgs),
     /// Install, uninstall or inspect a node/hub service on this machine.
     Service(service::ServiceArgs),
+    /// Install or inspect the privileged guardian.
+    #[command(subcommand)]
+    Guardian(guardian::Guardian),
     #[cfg(windows)]
     #[command(hide = true)]
     ServiceLocalNetwork(service_local_network::LocalNetworkArgs),
@@ -388,6 +392,7 @@ fn main() -> ExitCode {
             | Command::Node { .. }
             | Command::Renew(_)
             | Command::Service(_)
+            | Command::Guardian(_)
             | Command::Server(_)
             | Command::Hub(world::HubCommand::Serve { .. })
             | Command::Mcp(_)
@@ -467,6 +472,7 @@ fn main() -> ExitCode {
         }
         Command::Renew(args) => renew::run(args),
         Command::Service(args) => service::run(args),
+        Command::Guardian(command) => guardian::run(command),
         #[cfg(windows)]
         Command::ServiceLocalNetwork(args) => service_local_network::run(args),
         Command::Uninstall(command) => uninstall::run(command),
@@ -640,7 +646,9 @@ fn node(
     );
     let coordinator =
         prepared_by.map(|text| serde_json::from_str::<fastctx_types::ProcessIdentity>(&text)).transpose()?;
-    let startup_gate = if coordinator.is_none() {
+    let startup_gate = if supervision.is_some() && cfg!(unix) {
+        Some(fastctx_install::placement::node_activation(&root)?)
+    } else if coordinator.is_none() {
         let (forwarded, gate) = world_entry(&root, true)?;
         if let Some(result) = forwarded {
             return result;
@@ -727,6 +735,9 @@ type Entry = (Option<anyhow::Result<()>>, Option<fastctx_platform::FileLock>);
 
 fn world_entry(root: &std::path::Path, node: bool) -> anyhow::Result<Entry> {
     let source = std::env::current_exe()?;
+    if fastctx_install::service::guardian::is_program(root, &source)? {
+        return Ok((None, Some(fastctx_install::placement::activation(root)?)));
+    }
     let installed = fastctx_install::executable::installed_path(root);
     let source_is_installed = installed.is_file() && stable_name(&source, &installed)?;
     first_program::ensure(root, &source)?;

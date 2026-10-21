@@ -31,8 +31,8 @@ pub struct ServiceArgs {
     /// The executable to register; defaults to the stable World program.
     #[arg(long, value_parser = crate::paths::parser())]
     executable: Option<PathBuf>,
-    /// Linux: run the system service as this UID. Install/uninstall as root.
-    #[cfg(target_os = "linux")]
+    /// Unix: the node's owner UID. Install/uninstall its guardian as root.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[arg(long)]
     uid: Option<u32>,
     #[cfg(target_os = "linux")]
@@ -84,7 +84,7 @@ pub fn run(args: ServiceArgs) -> anyhow::Result<()> {
     let service = Service::new(kind, executable, directory.clone());
     #[cfg(windows)]
     let service = Service { user_sid: args.user_sid, ..service };
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let service = Service { uid: args.uid.unwrap_or(service.uid), ..service };
     let status = match args.action {
         Action::Install => service.install()?,

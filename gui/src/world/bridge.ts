@@ -1,3 +1,4 @@
+import type { UsageCallsQuery, UsageCallsPage } from "./usage-calls";
 // The way to the World from inside the shell: each function is one of the
 // shell's commands (`src-tauri/src/lib.rs`), which is one call of the
 // core's client. Outside the shell there is no World to reach, and
@@ -20,7 +21,7 @@ import type { Cut, Edge, FindDoc, Found, PartRead, Window } from "../conversatio
 import type { AccountChange, AccountsReply, HubAccount, TokenPeek } from "./accounts";
 import type { UsageReport } from "./usage";
 import type { HubMoveReply, HubMoveRequest } from "./hub-move";
-import type { MachineStats } from "./stats";
+import type { HomePrivacy, MachineStats } from "./stats";
 import type { Looked, RemoteHub, RemoteKey, RemoteServer, RemoteStep } from "../app/remote-world";
 import type { JournalSummary, JournalView, LookedUp, MapView, NodesReply, ProjectRecord, Stamp, TownSummary, WorldWho } from "./world";
 
@@ -397,6 +398,11 @@ export function agentUsage(machine: MachineName, agent: string, dir: string): Pr
   return invoke("agent_usage", { machineName: machine, agentName: agent, dir });
 }
 
+/** Request records, already filtered and redacted by the login's machine. */
+export function agentCalls(machine: MachineName, agent: string, dir: string, query: UsageCallsQuery = {}): Promise<UsageCallsPage> {
+  return invoke("agent_calls", { machineName: machine, agentName: agent, dir, query });
+}
+
 /** Residents or jobs in detail, from every machine that has them. */
 
 export function look(ids: string[]): Promise<LookedUp[]> {
@@ -768,4 +774,9 @@ export function arriveHub(): Promise<void> {
 
 export function remoteClose(session: number): Promise<void> {
   return invoke("remote_close", { session });
+}
+
+/** Read the owner's directory permissions, or perform the user's explicit privacy action. */
+export function homePrivacy(machine: MachineName | null, harden = false): Promise<HomePrivacy> {
+  return invoke("home_privacy", { machineName: machine, harden });
 }

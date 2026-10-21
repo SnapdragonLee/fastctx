@@ -139,6 +139,10 @@ impl Device {
                 let machine = machine.ok_or_else(|| failed("choose a machine for its folders; a device has none"))?;
                 (machine, RemoteCall::Folders { path }, None)
             }
+            Call::HomePrivacy { machine, harden } => {
+                let machine = machine.ok_or_else(|| failed("choose a machine for home directory permissions"))?;
+                (machine, RemoteCall::HomePrivacy { harden }, None)
+            }
             Call::Stats { machine, after } => {
                 let machine =
                     machine.ok_or_else(|| failed("choose a machine; a device has no details page of its own"))?;
@@ -169,6 +173,9 @@ impl Device {
             }
             Call::ChangeAgentLogin { machine, agent, dir, into, raise_output_limit, take_back } => {
                 (machine, RemoteCall::ChangeAgentLogin { agent, dir, into, raise_output_limit, take_back }, None)
+            }
+            Call::AgentCalls { machine, agent, dir, query } => {
+                (machine, RemoteCall::AgentCalls { agent, dir, query }, None)
             }
             Call::AgentUsage { machine, agent, dir } => (machine, RemoteCall::AgentUsage { agent, dir }, None),
             Call::ReadAgentLimits { machine, agent, dir } => {
@@ -292,11 +299,13 @@ impl Device {
             (RemoteCall::FindFiles { .. }, RemoteReply::FilesFound(reply)) => Reply::FilesFound(reply),
             (RemoteCall::Folders { .. }, RemoteReply::Folders(folders)) => Reply::Folders(folders),
             (RemoteCall::Stats { .. }, RemoteReply::Stats(stats)) => Reply::Stats(stats),
+            (RemoteCall::HomePrivacy { .. }, RemoteReply::HomePrivacy(privacy)) => Reply::HomePrivacy(privacy),
             (RemoteCall::UpdateWorld | RemoteCall::Updates { .. }, RemoteReply::Update(state)) => Reply::Update(state),
             (RemoteCall::Thumbnail { .. }, RemoteReply::Thumbnail(reply)) => Reply::Thumbnail(reply),
             (RemoteCall::AttachmentThumbnail { .. }, RemoteReply::Thumbnail(reply)) => Reply::Thumbnail(reply),
             (RemoteCall::Lines { .. }, RemoteReply::Lines(reply)) => Reply::Lines(reply),
             (RemoteCall::Homes { .. }, RemoteReply::Set) => Reply::Done,
+            (RemoteCall::AgentCalls { .. }, RemoteReply::AgentCalls(page)) => Reply::AgentCalls(page),
             (RemoteCall::AgentUsage { .. }, RemoteReply::AgentUsage(report)) => Reply::AgentUsage(report),
             (
                 RemoteCall::ScanAgents { .. }

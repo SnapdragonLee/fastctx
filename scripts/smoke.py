@@ -425,6 +425,14 @@ def node_processes(root, who):
     return {int(line.split(None, 1)[0]) for line in listing.splitlines() if serving.search(line)}
 
 
+def process_parent(path):
+    try:
+        match = re.search(r"^PPid:\s+(\d+)$", (path / "status").read_text(), re.M)
+        return int(match.group(1)) if match else None
+    except FileNotFoundError:
+        return None
+
+
 def service_process(status):
     """The process id the service manager says runs the service `status` names."""
     name = status["name"]
@@ -450,7 +458,13 @@ def service(lab, root):
 
     def served_by_service():
         pid = service_process(status)
-        return pid is not None and node_processes(root, "alpha") == {pid} and lab.online("alpha", "beta")
+        nodes = node_processes(root, "alpha")
+        if sys.platform.startswith("linux"):
+            # systemd now owns the root guardian; its one direct child is the user's node.
+            children = {int(path.name) for path in Path("/proc").iterdir() if path.name.isdigit()
+                        and process_parent(path) == pid}
+            return pid is not None and len(nodes) == 1 and nodes <= children and lab.online("alpha", "beta")
+        return pid is not None and nodes == {pid} and lab.online("alpha", "beta")
 
     until("the service's own node serves alpha's World, and no other", served_by_service, 120)
     code, out = lab.run("alpha", "service", "node", "status", "--dir", home, "--executable", str(installed))

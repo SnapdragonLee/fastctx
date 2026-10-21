@@ -37,3 +37,8 @@ impl fmt::Display for CertPin {
         fmt::Display::fmt(&self.0, f)
     }
 }
+
+/// An account keeps this identifier across renames, password changes and hub moves.
+pub fn new_account_id() -> std::io::Result<fastctx_types::guest::AccountId> {
+    Ok(fastctx_types::guest::AccountId::from_bytes(crate::sign::random::<16>()?))
+}

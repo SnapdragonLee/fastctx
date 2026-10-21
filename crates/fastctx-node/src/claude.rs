@@ -21,6 +21,8 @@ pub(crate) mod calls;
 pub(crate) mod control;
 mod fork;
 mod fork_history;
+mod fork_ready;
+mod fork_source;
 pub(crate) mod garbage;
 pub(crate) mod history;
 mod image_records;
@@ -28,6 +30,7 @@ pub(crate) use image_records::paths as image_records;
 mod image_flush;
 pub(crate) use image_flush::wait_for_image;
 pub mod management;
+mod oldest;
 pub(crate) mod pairing;
 mod plugin_check;
 mod process;
@@ -69,6 +72,8 @@ pub struct Claude {
     /// The user's words handed to each resident's session as the user's,
     /// until Claude Code reports keeping them (`said_by_world`).
     handed: Mutex<HashMap<ResidentId, Vec<String>>>,
+    /// The Claude Code last found new enough to start sessions in.
+    checked: oldest::Checked,
 }
 
 struct State {
@@ -107,6 +112,7 @@ impl Claude {
             startup_listings: Default::default(),
             changed: Default::default(),
             handed: Default::default(),
+            checked: Default::default(),
         })
     }
 
@@ -242,6 +248,7 @@ pub async fn replay(node: &Arc<Node>) {
 }
 
 pub(crate) fn recover_startups(node: &Arc<Node>) {
+    fork_ready::recover(node);
     startup::recover(node);
 }
 
@@ -1072,6 +1079,11 @@ pub async fn deliver(
 ) -> Option<Result<Landed, Failure>> {
     let delivering = node.claude.delivering.get_or_insert_with(to, || crate::ranked::delivering(to));
     let _delivering = delivering.lock().await;
+    match fork_ready::pending(node, to) {
+        Ok(Some(why)) => return Some(Ok(Landed::Waiting { why: Some(why), answered: true })),
+        Err(error) => return Some(Err(error)),
+        Ok(None) => {}
+    }
     let session: String = node.claude.state.lock().expect("never poisoned").paired.get(to)?;
     if let Err(error) = crate::inbox::target(directory, &pending.delivery.id, &session) {
         return Some(Err(Failure::new(error.to_string())));
@@ -1182,6 +1194,9 @@ fn into_inbox(
     directory: &ConversationDir,
     pending: &Pending,
 ) -> Result<Landed, Failure> {
+    if let Some(why) = fork_ready::pending(node, resident)? {
+        return Ok(Landed::Waiting { why: Some(why), answered: true });
+    }
     let taking = node.taking.lock().expect("never poisoned");
     if taking.iter().any(|(_, id)| *id == pending.delivery.id) {
         return Ok(Landed::Waiting {
@@ -1268,7 +1283,9 @@ async fn wake(
     words: String,
     id: fastctx_types::NoticeId,
 ) -> Result<Landed, Failure> {
-    let Command { program, cwd, env } = command(node, home)?;
+    let launching = command(node, home)?;
+    oldest::check(node, &launching).await?;
+    let Command { program, cwd, env } = launching;
     if let Some(resident) = node.residents.resident_of_thread(session) {
         crate::profile::session::claude(node, &resident, false)?;
     }
@@ -1344,10 +1361,13 @@ pub async fn open_here(
     if let Some(town) = &town {
         crate::town::project::spans_here(node, town).await?;
     }
+    // Nothing of the conversation is made for a Claude Code that cannot
+    // run it.
+    let launching = command(node, opened.home.as_deref())?;
+    oldest::check(node, &launching).await?;
     let agent = AgentName::try_from("claude").expect("a valid agent name");
     let (id, _opening) = crate::attachments::opening(node, &agent, town.as_ref(), &attachments).await?;
-    let _birth = crate::here::born(node, &id, opened.acting.clone());
-    let launching = command(node, opened.home.as_deref())?;
+    let _birth = crate::here::born(node, &id, opened.acting.clone())?;
     let Command { program, env, .. } = launching.clone();
     // A login assisting another account starts without the browser of this
     // machine (`background::Start::assisting`).
@@ -1360,6 +1380,7 @@ pub async fn open_here(
     crate::focus::open(node, &node.world.conversation(&id), &opened.acting, &opened.focus).await?;
     let born_at = Timestamp::now();
     let about = About {
+        principals: _birth.principals(),
         mcp_off: options.mcp_off.clone(),
         id: id.clone(),
         host: Host { agent, client: "claude-code".to_string(), version: String::new() },

@@ -210,8 +210,9 @@ def main():
         debdir = work/'deb'
         run('dpkg-deb', '-x', deb, debdir)
         run('dpkg-deb', '-e', deb, debdir/'DEBIAN')
-        shutil.copyfile(ROOT/'gui/scripts/deb-prerm', debdir/'DEBIAN/prerm')
-        (debdir/'DEBIAN/prerm').chmod(0o755)
+        for hook in ('prerm', 'postinst'):
+            shutil.copyfile(ROOT/f'gui/scripts/deb-{hook}', debdir/f'DEBIAN/{hook}')
+            (debdir/f'DEBIAN/{hook}').chmod(0o755)
         run('dpkg-deb', '--root-owner-group', '--build', debdir, work/'fastctx.deb')
         shutil.copyfile(work/'fastctx.deb', deb)
         deb_expected = dict(expected)

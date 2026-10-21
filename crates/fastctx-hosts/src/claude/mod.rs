@@ -20,6 +20,8 @@ mod context;
 pub mod control;
 pub mod exchange;
 pub mod models;
+mod oldest;
+pub mod pricing;
 pub mod projects;
 pub mod startup;
 pub mod subagents;
@@ -30,6 +32,8 @@ pub mod titles;
 mod tools;
 pub mod transcript;
 pub mod trust;
+
+pub use oldest::{OLDEST, supported};
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -182,6 +186,7 @@ pub fn write_plugin(world: &Path) -> io::Result<PathBuf> {
         .replace("__FASTCTX_SELECTION__", include_str!("selection.js"))
         .replace("__FASTCTX_REWIND__", include_str!("rewind.js"))
         .replace("__FASTCTX_OBSERVATIONS__", include_str!("observations.js"))
+        .replace("__FASTCTX_USAGE__", include_str!("accounting.js"))
         .replace("__FASTCTX_FAILURES__", include_str!("failure.js"));
     let module = module.replace("__FASTCTX_WORLD__", &serde_json::to_string(&directory).expect("strings serialize"));
     let module = module.replace("__FASTCTX_COMMAND__", &serde_json::to_string(&command).expect("strings serialize"));

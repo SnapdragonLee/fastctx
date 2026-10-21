@@ -10,6 +10,9 @@ pub fn deliver(root: &Path) -> anyhow::Result<Option<anyhow::Result<()>>> {
 /// Ordinary World commands use the selected kernel, including while its
 /// boot-service handover awaits approval. Only a newer delivery installs.
 pub fn world(root: &Path) -> anyhow::Result<Option<anyhow::Result<()>>> {
+    if fastctx_install::service::guardian::is_program(root, &std::env::current_exe()?)? {
+        return Ok(None);
+    }
     // A World's first program is placed once for all its first users, a node
     // starting beside this command among them: placed apart, one of the two
     // would find the other's placement under way and end.

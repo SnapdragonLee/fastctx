@@ -2,8 +2,6 @@
 //! removal stops it. Managers restore exited processes without a retry limit;
 //! an independent periodic check also restores a stopped service.
 
-#[cfg(target_os = "linux")]
-use std::ffi::OsString;
 use std::path::PathBuf;
 #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 use std::process::{Command, Stdio};
@@ -17,6 +15,8 @@ use sha2::{Digest as _, Sha256};
 
 #[cfg(windows)]
 mod delegate;
+pub mod guardian;
+pub mod guests;
 mod hub;
 mod hub_registry;
 mod inventory;
@@ -35,6 +35,10 @@ mod local_network;
 mod macos;
 #[cfg(any(windows, target_os = "linux"))]
 mod transaction;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_guardian;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_owner;
 
 pub use hub::{keep_hub, keep_hub_at};
 pub use hub_registry::registered_hubs;
@@ -67,8 +71,8 @@ pub struct Service {
     pub kind: Kind,
     pub executable: PathBuf,
     pub directory: PathBuf,
-    /// Linux system services run as this UID (root installs on its behalf);
-    /// a macOS node is a LaunchAgent of this user.
+    /// The node's Unix UID; its guardian runs as root. A macOS user's node
+    /// remains in this user's LaunchAgent and keychain session.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub uid: u32,
     /// Windows node owner; defaults to the installing user's SID.
@@ -149,6 +153,13 @@ impl Service {
         #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         {
             if self.kind == Kind::Node {
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                if fastctx_platform::elevation::is_elevated()? {
+                    unix_owner::marker(&normalized, true)?;
+                } else {
+                    std::fs::write(keep::marker(&self.directory), b"")?;
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 std::fs::write(keep::marker(&self.directory), b"")?;
             }
             Ok(status)
@@ -160,9 +171,11 @@ impl Service {
     pub fn uninstall(&self) -> anyhow::Result<Status> {
         let status = self.uninstall_registration()?;
         if self.kind == Kind::Node {
-            match std::fs::remove_file(keep::marker(&self.directory)) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
-                _ => {}
+            for marker in [keep::marker(&self.directory), self.directory.join(crate::guest_privacy::MARKER)] {
+                match std::fs::remove_file(marker) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                    _ => {}
+                }
             }
         }
         Ok(status)
@@ -204,17 +217,23 @@ impl Service {
     #[cfg(target_os = "linux")]
     pub fn main_pid(&self) -> anyhow::Result<u64> {
         self.validate()?;
-        linux::main_pid(&self.normalized()?)
+        let service = self.normalized()?;
+        if unix_guardian::installed(&service)? {
+            return unix_guardian::child_pid(&service);
+        }
+        linux::main_pid(&service)
     }
 
-    /// Whether the protected guardian already runs this image. Linux's
-    /// guardian is systemd itself, so a node image needs no privileged update.
+    /// Whether the protected guardian already runs this image. A legacy Unix
+    /// installation without one keeps its existing update path until enrolled.
     pub fn guardian_current(&self, digest: &str) -> anyhow::Result<bool> {
         self.validate()?;
         let normalized = self.normalized()?;
         #[cfg(windows)]
         return windows::guardian_current(&normalized, digest);
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return unix_guardian::current(&normalized, digest);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = (digest, normalized);
             Ok(true)
@@ -228,7 +247,9 @@ impl Service {
         let normalized = self.normalized()?;
         #[cfg(windows)]
         return windows::renew_guardian(&normalized, digest);
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return unix_guardian::replace(&normalized, digest);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = (digest, normalized);
             bail!("this platform has no bundled guardian")
@@ -242,6 +263,9 @@ impl Service {
         #[cfg(target_os = "linux")]
         {
             let normalized = self.normalized()?;
+            if unix_guardian::installed(&normalized)? {
+                return Ok(());
+            }
             linux_restart::may(&normalized.id(&normalized.uid.to_le_bytes()))
         }
         #[cfg(not(target_os = "linux"))]
@@ -256,6 +280,9 @@ impl Service {
         #[cfg(target_os = "linux")]
         {
             let normalized = self.normalized()?;
+            if unix_guardian::installed(&normalized)? {
+                return linux_restart::forbid(&normalized.id(&normalized.uid.to_le_bytes()));
+            }
             linux_restart::allow(&normalized.id(&normalized.uid.to_le_bytes()), uid)
         }
         #[cfg(not(target_os = "linux"))]
@@ -274,7 +301,9 @@ impl Service {
         let normalized = self.normalized()?;
         #[cfg(windows)]
         return windows::adopt_guardian(&normalized, digest);
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return unix_guardian::adopt(&normalized, digest);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = (digest, normalized);
             Ok(false)
@@ -286,7 +315,9 @@ impl Service {
         let normalized = self.normalized()?;
         #[cfg(windows)]
         return windows::guardian_staged(&normalized, digest);
-        #[cfg(not(windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        return unix_guardian::staged(&normalized, digest);
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = (digest, normalized);
             Ok(true)
@@ -303,13 +334,20 @@ impl Service {
         return windows::restart_guardian(&normalized, digest);
         #[cfg(target_os = "linux")]
         {
-            let _ = digest;
+            if unix_guardian::installed(&normalized)? {
+                return unix_guardian::restart(&normalized, digest);
+            }
             linux_restart::restart(&normalized.id(&normalized.uid.to_le_bytes()))
         }
         #[cfg(target_os = "macos")]
         {
-            let _ = digest;
-            macos::restart(&normalized)
+            if unix_guardian::installed(&normalized)? {
+                unix_guardian::restart(&normalized, digest)?;
+            }
+            if normalized.kind == Kind::Node {
+                macos::restart(&normalized)?;
+            }
+            Ok(())
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
@@ -354,8 +392,8 @@ impl Service {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn arguments(&self) -> Vec<OsString> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn arguments_for_guardian(&self) -> Vec<std::ffi::OsString> {
         let mut args = vec![self.role().into()];
         if self.kind == Kind::Hub {
             args.push("serve".into());
@@ -425,7 +463,8 @@ pub(crate) fn checked(command: &mut Command) -> anyhow::Result<String> {
         use std::os::windows::process::CommandExt as _;
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let output = command.output().with_context(|| format!("starting {:?}", command.get_program()))?;
+    let output =
+        crate::program::service_answer(command).with_context(|| format!("starting {:?}", command.get_program()))?;
     if !output.status.success() {
         bail!(
             "{:?} exited {}: {}{}",

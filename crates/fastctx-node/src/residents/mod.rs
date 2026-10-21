@@ -463,6 +463,7 @@ impl Residents {
         }
         let resident = new_id(&host.agent, &state)?;
         let about = About {
+            principals: Vec::new(),
             mcp_off: Default::default(),
             id: resident.clone(),
             host,

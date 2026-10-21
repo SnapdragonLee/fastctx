@@ -859,7 +859,8 @@ impl fastctx_net::link::Node for Handler {
                 | RemoteCall::PreviewAgentChange { .. }
                 | RemoteCall::ChangeAgentLogin { .. }
                 | RemoteCall::ReadAgentLimits { .. }
-                | RemoteCall::AgentUsage { .. }) => {
+                | RemoteCall::AgentUsage { .. }
+                | RemoteCall::AgentCalls { .. }) => {
                     crate::logins::remote::answer(&node, &link.view(), &asker, call).await
                 }
                 RemoteCall::Folders { path } => {
@@ -997,6 +998,9 @@ impl fastctx_net::link::Node for Handler {
                         .await
                         .map(|state| RemoteReply::Update(Box::new(state)))
                         .map_err(Failure::new)
+                }
+                RemoteCall::HomePrivacy { harden } => {
+                    crate::guests::privacy_here(harden).await.map(RemoteReply::HomePrivacy)
                 }
                 RemoteCall::Stats { after } => {
                     crate::stats::here(&node, after).await.map(|stats| RemoteReply::Stats(Box::new(stats)))

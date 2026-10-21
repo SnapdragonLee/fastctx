@@ -154,14 +154,25 @@ fn target_from_sid(raw: *mut std::ffi::c_void) -> anyhow::Result<Target> {
 }
 
 pub(super) fn enable_privileges() -> anyhow::Result<()> {
-    let token = current_token(TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES)?;
-    for privilege in [
+    enable(&[
         "SeTcbPrivilege",
+        "SeDebugPrivilege",
         "SeAssignPrimaryTokenPrivilege",
         "SeIncreaseQuotaPrivilege",
         "SeBackupPrivilege",
         "SeRestorePrivilege",
-    ] {
+    ])
+}
+
+/// An elevated uninstaller has these administrative privileges, but not the
+/// service-only TCB privilege needed for S4U logon.
+pub(super) fn enable_guest_administration() -> anyhow::Result<()> {
+    enable(&["SeDebugPrivilege", "SeBackupPrivilege", "SeRestorePrivilege"])
+}
+
+fn enable(privileges: &[&str]) -> anyhow::Result<()> {
+    let token = current_token(TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES)?;
+    for privilege in privileges {
         let name: Vec<u16> = privilege.encode_utf16().chain([0]).collect();
         let mut luid = LUID::default();
         // SAFETY: a terminated privilege name, writable output and valid token.

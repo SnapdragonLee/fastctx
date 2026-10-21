@@ -1,4 +1,4 @@
-//! The private, inherited channel between a Windows guardian and its node.
+//! The private, inherited lifetime channel between a guardian and its node.
 //! Each message is exactly one byte. It carries lifecycle state only, never
 //! a path, identity request, command line, or executable code.
 
@@ -84,9 +84,19 @@ pub fn inherited(control: u64, events: u64) -> io::Result<(std::fs::File, std::f
     Ok((take(control)?, take(events)?))
 }
 
-/// A guardian hands its node a channel only on Windows; elsewhere the
-/// system's service manager is the guardian and needs none.
-#[cfg(not(windows))]
-pub fn inherited(_control: u64, _events: u64) -> io::Result<(std::fs::File, std::fs::File)> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "a guardian hands its node a channel only on Windows"))
+/// Takes ownership of the two descriptors inherited from a Unix guardian.
+#[cfg(unix)]
+pub fn inherited(control: u64, events: u64) -> io::Result<(std::fs::File, std::fs::File)> {
+    use std::os::fd::FromRawFd as _;
+    if control == events || control < 3 || events < 3 || control > i32::MAX as u64 || events > i32::MAX as u64 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid guardian descriptors"));
+    }
+    let take = |fd: u64| -> io::Result<std::fs::File> {
+        // SAFETY: these descriptors are handed to this process alone before exec.
+        if unsafe { libc::fcntl(fd as i32, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { std::fs::File::from_raw_fd(fd as i32) })
+    };
+    Ok((take(control)?, take(events)?))
 }

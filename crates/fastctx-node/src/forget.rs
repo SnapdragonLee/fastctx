@@ -100,6 +100,29 @@ pub(crate) async fn ask(node: &Arc<Node>, resident: ResidentId, machine: Machine
     }
 }
 
+/// The authenticated hub retired this stable identity. Reuse the normal
+/// conversation deletion path, including stopping its turn and commands.
+pub(crate) async fn retired_guest(
+    node: &Arc<Node>,
+    principal: &fastctx_types::guest::Principal,
+    room: &fastctx_install::service::guests::Room,
+) -> Result<(), String> {
+    if let Some(machine) = &room.machine {
+        return elsewhere(node, &Address { machine: machine.clone(), resident: room.resident.clone() }).await;
+    }
+    if let Some((about, _)) = node.residents.about(&room.resident) {
+        let bound = about.principals.iter().any(|known| known.same_person(principal));
+        // Older conversations acquire a native room only under the node's
+        // verified assistance. Owner sessions (Acting::Here) never qualify.
+        let legacy = about.principals.is_empty()
+            && matches!(&about.acting, Acting::Accounts { accounts } if accounts.iter().any(|account| account.hub == principal.hub && account.account == principal.account));
+        if !bound && !legacy {
+            return Err("the conversation belongs to another account".into());
+        }
+    }
+    home(node, &room.resident).await
+}
+
 /// The hub `hub` has this machine delete what it keeps of a conversation.
 pub(crate) async fn told(node: &Arc<Node>, hub: &HubId, forgetting: Forgetting) -> Forgot {
     let Ok(_call) = handing(node) else {
@@ -310,6 +333,9 @@ async fn stop_jobs(node: &Arc<Node>, owner: &Address) -> Result<(), String> {
 async fn forget_copies(node: &Arc<Node>, resident: &ResidentId, machines: Vec<MachineName>) -> Result<(), String> {
     let (root, resident) = (node.root.clone(), resident.clone());
     tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+        if !root.join("cache").join("viewed").try_exists()? {
+            return Ok(());
+        }
         let cache = fastctx_client::cache::Cache::under(&root)?;
         for machine in machines {
             cache.forget(&Address { machine, resident: resident.clone() })?;

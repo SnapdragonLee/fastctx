@@ -42,7 +42,11 @@ impl Link {
             AccountChange::Share { machine, to, shared } => Change::Share { machine, to, shared },
             AccountChange::Assist { machine, to, agent, home, assisting, until, weekly, daily, five_hour } => {
                 return self
-                    .assist(account, Assist { machine, account: to, agent, home, until, weekly, daily, five_hour }, assisting)
+                    .assist(
+                        account,
+                        Assist { machine, account: to, agent, home, until, weekly, daily, five_hour },
+                        assisting,
+                    )
                     .await
                     .map(|()| None);
             }
@@ -118,7 +122,10 @@ impl Link {
             }
             AccountChange::Updates { policy } => Change::Updates { policy },
             AccountChange::Intake { .. } if !self.view().paced_intake => {
-                return Err(format!("the hub {} runs an older fastctx that sets no ceiling on its intake", self.hub_name()));
+                return Err(format!(
+                    "the hub {} runs an older fastctx that sets no ceiling on its intake",
+                    self.hub_name()
+                ));
             }
             AccountChange::Intake { rate } => Change::Intake { rate },
             AccountChange::UpdateDue { .. } if !self.view().due => {
@@ -340,7 +347,8 @@ impl Link {
                 .iter()
                 .filter(|project| {
                     view.me().is_some_and(|me| {
-                        me.logins.contains(&project.owner) || project.granted.iter().any(|account| me.logins.contains(account))
+                        me.logins.contains(&project.owner)
+                            || project.granted.iter().any(|account| me.logins.contains(account))
                     })
                 })
                 .map(|project| ProjectSeen {
@@ -353,5 +361,23 @@ impl Link {
             links: self.direct_links(),
             tokens: view.tokens.clone(),
         }
+    }
+}
+
+impl Link {
+    /// Acknowledge only this machine's completed deletions, on a hub that
+    /// advertised the stable-account lifecycle protocol.
+    pub async fn guest_accounts_deleted(&self, ids: Vec<fastctx_types::guest::AccountId>) -> Result<(), String> {
+        if !self.view().guest_accounts {
+            return Err("this hub has no stable account lifecycle protocol".into());
+        }
+        match self.inner.ask(crate::wire::Question::GuestAccountsDeleted { ids: ids.clone() }).await? {
+            Told::Done => self.inner.refresh().await?,
+            _ => return Err("the hub did not acknowledge guest account cleanup".into()),
+        }
+        if self.view().deleted_guest_accounts.iter().any(|principal| ids.contains(&principal.id)) {
+            return Err("the hub's view has not reflected the account cleanup receipt".into());
+        }
+        Ok(())
     }
 }

@@ -84,6 +84,15 @@ fn kept_digest(path: &Path) -> Option<PathBuf> {
     if !root.is_dir() {
         return None;
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        // 2026-10-20: elevated installation must not create root-owned cache
+        // parents in another user's World, or trust that user's digest cache.
+        if fs::metadata(&root).ok()?.uid() != unsafe { libc::geteuid() } {
+            return None;
+        }
+    }
     let name = format!("{:x}", Sha256::digest(canonical.as_os_str().as_encoded_bytes()));
     Some(root.join("cache").join("digests").join(name))
 }
@@ -333,7 +342,7 @@ pub fn stage(root: &Path, source: &Path, _running: Option<&Path>) -> anyhow::Res
         && plan.previous.as_ref().is_some_and(|previous| previous.build == plan.candidate.build)
         && match &serving {
             fastctx_client::renewal::Probe::Running(node) => {
-                std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(installed(root))?
+                node.supervised || std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(installed(root))?
             }
             fastctx_client::renewal::Probe::Absent => true,
             fastctx_client::renewal::Probe::Legacy { .. } => false,

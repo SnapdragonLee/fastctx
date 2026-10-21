@@ -59,6 +59,10 @@ impl Registration {
                                 | "service-hub.log.1"
                                 | "running.json"
                                 | "manager.lock"
+                                | "guests.lock"
+                                | "guests-retired"
+                                | "guests.log"
+                                | "guests.log.1"
                                 | "transaction.json"
                                 // A renewal of the protected guardian leaves its receipt
                                 // beside the image it replaced.
@@ -66,6 +70,10 @@ impl Registration {
                                 | "payload.renewal-files.json"
                         ) {
                             crate::uninstall::delete_file(&entry.path())?;
+                        } else if name == "guests" && entry.file_type()?.is_dir() {
+                            // Retire completed every native account before service removal.
+                            // An unexpected remaining record is not silently discarded.
+                            std::fs::remove_dir(entry.path())?;
                         } else if crate::executable::is_retired(&entry.path()) {
                             // The earlier image a renewal kept while it was mapped.
                             crate::executable::delete_retired(&entry.path())

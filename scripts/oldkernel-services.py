@@ -1,5 +1,6 @@
 """A test-only systemd generator, scoped to one smoke test's temporary root."""
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -27,9 +28,14 @@ def main():
         if not command:
             continue
         arguments = list(words(command))
-        if "--dir" not in arguments:
+        if "--name" in arguments and arguments[1:3] == ["guardian", "serve"]:
+            registration = arguments[arguments.index("--name") + 1]
+            config = json.loads((Path("/var/lib/fastctx-guardians") / registration / "config.json").read_text())
+            directory = Path(os.fsdecode(bytes(config["directory"])))
+        elif "--dir" in arguments:
+            directory = Path(arguments[arguments.index("--dir") + 1])
+        else:
             continue
-        directory = Path(arguments[arguments.index("--dir") + 1])
         if not directory.is_relative_to(root):
             continue
         prefix = ":" if command.startswith(":") else ""

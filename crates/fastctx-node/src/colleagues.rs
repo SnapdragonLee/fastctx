@@ -200,7 +200,7 @@ pub async fn ask_here(
         },
     )?;
     let origin = Origin::Colleague { asked_by: asker.clone(), label };
-    let _birth = crate::here::born(node, &id, acting.clone());
+    let _birth = crate::here::born(node, &id, acting.clone())?;
     let (spec, heard) = thread_spec(node, &id, &origin, town.as_ref(), &acting, home.as_deref()).await?;
     // Until it is claimed below, reports of threads nobody claims are kept.
     let _starting = crate::codex::starting(node);
@@ -209,6 +209,7 @@ pub async fn ask_here(
     })?;
     let born_at = Timestamp::now();
     let about = About {
+        principals: _birth.principals(),
         mcp_off: Default::default(),
         id: id.clone(),
         host: Host { agent, client: "codex app-server".to_string(), version: String::new() },

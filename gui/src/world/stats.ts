@@ -115,6 +115,7 @@ export interface NodeSeen {
   started: Timestamp;
   /** Whether a system service keeps it running. */
   service: boolean;
+  guardian?: { installed: boolean; running: boolean; reason?: string; install?: string };
   /** What of its work has gone on too long, as it last looked at itself. */
   stuck?: StuckWork[];
   /** The last place macOS kept private from it while it runs, and when. */
@@ -126,4 +127,10 @@ export interface StuckWork {
   doing: string;
   what: string;
   seconds: number;
+}
+
+export interface HomePrivacy {
+  directory: string | null;
+  owner_only: boolean | null;
+  reason: string | null;
 }

@@ -4,12 +4,13 @@
 use std::ffi::OsStr;
 use std::io;
 use std::os::windows::ffi::OsStrExt as _;
+use std::os::windows::io::{AsRawHandle as _, BorrowedHandle};
 use std::ptr;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-    SE_KERNEL_OBJECT,
+    SE_FILE_OBJECT, SE_KERNEL_OBJECT, SE_OBJECT_TYPE,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, TOKEN_QUERY, TOKEN_USER, TokenUser,
@@ -18,7 +19,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 /// The current process's user, as text such as `S-1-5-21-…`.
 pub fn current_user_sid() -> io::Result<String> {
-    with_current_token(token_user_sid)
+    with_current_token(|token| token_user_sid(unsafe { BorrowedHandle::borrow_raw(token) }))
 }
 
 /// Runs `query` with this process's own token, opened for queries.
@@ -34,7 +35,9 @@ pub fn with_current_token<R>(query: impl FnOnce(HANDLE) -> io::Result<R>) -> io:
     result
 }
 
-pub(crate) fn token_user_sid(token: HANDLE) -> io::Result<String> {
+/// The user SID authenticated by an already-open native token.
+pub fn token_user_sid(token: BorrowedHandle<'_>) -> io::Result<String> {
+    let token = token.as_raw_handle();
     let mut needed = 0u32;
     // SAFETY: a size query with no buffer.
     unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut needed) };
@@ -50,7 +53,17 @@ pub(crate) fn token_user_sid(token: HANDLE) -> io::Result<String> {
 
 /// The owner of a kernel object, such as a pipe, given a handle with read
 /// access to its security.
-pub fn object_owner_sid(handle: HANDLE) -> io::Result<String> {
+pub fn object_owner_sid(handle: BorrowedHandle<'_>) -> io::Result<String> {
+    owner_sid(handle, SE_KERNEL_OBJECT)
+}
+
+/// The owner of a file or directory, given its open handle.
+pub fn file_owner_sid(handle: BorrowedHandle<'_>) -> io::Result<String> {
+    owner_sid(handle, SE_FILE_OBJECT)
+}
+
+fn owner_sid(handle: BorrowedHandle<'_>, kind: SE_OBJECT_TYPE) -> io::Result<String> {
+    let handle = handle.as_raw_handle();
     let mut owner: PSID = ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
     // SAFETY: out-parameters only; the descriptor holding the owner is
@@ -58,7 +71,7 @@ pub fn object_owner_sid(handle: HANDLE) -> io::Result<String> {
     let code = unsafe {
         GetSecurityInfo(
             handle,
-            SE_KERNEL_OBJECT,
+            kind,
             OWNER_SECURITY_INFORMATION,
             &mut owner,
             ptr::null_mut(),

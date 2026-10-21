@@ -20,11 +20,27 @@ const MARKER: &str = "<!-- fastctx service v1 -->";
 const APPLICATION: &str = "dev.fastctx.world";
 
 pub(super) fn status(service: &Service) -> anyhow::Result<Status> {
+    if (service.kind == Kind::Hub || service.uid == 0) && super::unix_guardian::installed(service)? {
+        return super::unix_guardian::launchd_status(service);
+    }
     let installed = definition_path(service)?.try_exists()?;
     observed(service, installed)
 }
 
 pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
+    if fastctx_platform::elevation::is_elevated()? {
+        super::unix_guardian::install(service)?;
+        if service.kind == Kind::Hub || service.uid == 0 {
+            if loaded(&target(service)) {
+                launchctl(&["bootout", &target(service)])?;
+            }
+            match std::fs::remove_file(definition_path(service)?) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+                _ => {}
+            }
+            return super::unix_guardian::launchd_status(service);
+        }
+    }
     if !service.executable.is_file() || !service.directory.is_dir() {
         bail!("the executable and service data directory must exist before installation");
     }
@@ -57,6 +73,10 @@ pub(super) fn install(service: &Service) -> anyhow::Result<Status> {
 }
 
 pub(super) fn uninstall(service: &Service) -> anyhow::Result<Status> {
+    if super::unix_guardian::installed(service)? {
+        super::unix_guardian::uninstall(service)?;
+        super::unix_guardian::forget(service)?;
+    }
     let path = definition_path(service)?;
     let target = target(service);
     if loaded(&target) {
@@ -89,6 +109,20 @@ pub(super) fn registrations(installation: &crate::uninstall::Installation) -> an
             else {
                 continue;
             };
+            if let Some(stem) = name.strip_suffix(".guardian.plist") {
+                if let Some(service) = super::unix_guardian::registration(stem)?
+                    && service.executable.starts_with(installation.root.join("bin"))
+                {
+                    found.push(super::Registration {
+                        name: stem.into(),
+                        kind: service.kind,
+                        executable: service.executable,
+                        directory: service.directory,
+                        artifacts: Vec::new(),
+                    });
+                }
+                continue;
+            }
             let text = std::fs::read_to_string(entry.path())?;
             if !text.starts_with(MARKER) {
                 bail!("{} is not an owned fastctx definition", entry.path().display());
@@ -121,6 +155,8 @@ pub(super) fn registrations(installation: &crate::uninstall::Installation) -> an
             });
         }
     }
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found.dedup_by(|a, b| a.kind == b.kind && a.directory == b.directory);
     Ok(found)
 }
 
@@ -146,7 +182,9 @@ fn definition_path(service: &Service) -> anyhow::Result<PathBuf> {
     Ok(if daemon(service) {
         PathBuf::from("/Library/LaunchDaemons").join(file)
     } else {
-        fastctx_platform::user_home()?.join("Library/LaunchAgents").join(file)
+        let account =
+            fastctx_platform::unix_account::lookup(service.uid)?.context("the node owner no longer exists")?;
+        PathBuf::from(account.home).join("Library/LaunchAgents").join(file)
     })
 }
 

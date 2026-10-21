@@ -44,3 +44,5 @@ mod snapshot;
 
 pub use edits::{Error, File, Notice};
 pub(crate) use edits::{check_path, finish};
+
+pub mod guest_privacy;

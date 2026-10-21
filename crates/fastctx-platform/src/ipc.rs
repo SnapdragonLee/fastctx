@@ -403,7 +403,8 @@ mod imp {
                 Err(error) => return Err(with_place(error, address)),
             }
         };
-        let owner = object_owner_sid(client.as_raw_handle())?;
+        let owner =
+            object_owner_sid(unsafe { std::os::windows::io::BorrowedHandle::borrow_raw(client.as_raw_handle()) })?;
         if owner != current_user_sid()? {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,

@@ -103,6 +103,8 @@ pub struct Dissolved {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Book {
     #[serde(default)]
+    pub(crate) guest_accounts: crate::guest_accounts::History,
+    #[serde(default)]
     pub(crate) machine_log: crate::machine_log::History,
     #[serde(flatten)]
     pub directory: Directory,
@@ -761,8 +763,22 @@ impl Store {
         let (mut upgraded, mut said) = crate::upgrade::upgrade(raw);
         let shaped = !said.is_empty();
         let relays = crate::upgrade::drop_relays(&mut upgraded);
-        let book: Book = serde_json::from_value(upgraded)
+        let mut book: Book = serde_json::from_value(upgraded)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {error}", path.display())))?;
+        let mut identified = false;
+        for account in &mut book.directory.accounts {
+            if account.id.is_none() {
+                account.id = Some(fastctx_net::ids::new_account_id()?);
+                identified = true;
+            }
+        }
+        let guest_hosts = book.guest_accounts.observe(&book.directory);
+        if guest_hosts {
+            said.push("remembered the hosts of current assistance".into());
+        }
+        if identified {
+            said.push("assigned persistent identifiers to existing accounts".into());
+        }
         if shaped {
             let before = dir.join("directory.before-sharing.json");
             if !before.exists() {

@@ -234,6 +234,11 @@ pub(crate) async fn here(node: &Arc<Node>, after: Option<Timestamp>) -> Result<M
             version: env!("CARGO_PKG_VERSION").to_string(),
             started: node.started,
             service: node.lifetime.supervised,
+            guardian: Some(fastctx_install::service::guardian::status(&fastctx_install::service::Service::new(
+                fastctx_install::service::Kind::Node,
+                fastctx_install::executable::installed_path(&node.root),
+                &node.root,
+            ))),
             stuck: node
                 .stuck
                 .now()

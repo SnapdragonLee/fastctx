@@ -112,7 +112,7 @@ fn described(name: &[u16]) -> anyhow::Result<Option<Option<String>>> {
     Ok(Some(comment))
 }
 
-fn sid_of(name: &[u16]) -> anyhow::Result<String> {
+pub(super) fn sid_of(name: &[u16]) -> anyhow::Result<String> {
     let (mut sid_len, mut domain_len, mut kind): (u32, u32, SID_NAME_USE) = (0, 0, 0);
     // SAFETY: the first call measures the two buffers.
     unsafe {

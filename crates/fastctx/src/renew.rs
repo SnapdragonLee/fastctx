@@ -156,12 +156,20 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
     let kept = world.node_service().exists();
     let service =
         fastctx_install::service::Service::new(fastctx_install::service::Kind::Node, store::installed(root), root);
-    let needs_guardian = kept && !service.guardian_current(&plan.candidate.build.digest)?;
+    let root_upgrade = cfg!(target_os = "linux")
+        && fastctx_platform::elevation::is_elevated()?
+        && !fastctx_install::service::guardian::status(&service).installed;
+    let needs_guardian = kept && (root_upgrade || !service.guardian_current(&plan.candidate.build.digest)?);
     let current = renewal::probe(&world).await?;
     if let Probe::Running(node) = &current
         && node.build == plan.candidate.build
-        && std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(store::installed(root))?
+        && (node.supervised
+            || std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(store::installed(root))?)
     {
+        // A package may have replaced the protected image before the user's stable copy.
+        if node.supervised && store::digest(&store::installed(root))? != plan.candidate.build.digest {
+            store::install(root, &plan.candidate)?;
+        }
         if node.bridge {
             return finish_bridge(root, plan, needs_guardian).await;
         }
@@ -171,7 +179,7 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
         // The guardian runs the candidate as its node already, as after a
         // handover whose guardian refused the program: a bridge would wait
         // for that node to leave, which its guardian never lets it.
-        if needs_guardian && node.supervised && cfg!(windows) {
+        if needs_guardian && node.supervised {
             return guard_supervised(root, plan).await;
         }
     }
@@ -222,7 +230,8 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
         let observed = observing(&world).await?;
         if let Probe::Running(node) = &observed
             && node.build == plan.candidate.build
-            && std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(store::installed(root))?
+            && (node.supervised
+                || std::fs::canonicalize(&node.executable)? == std::fs::canonicalize(store::installed(root))?)
             && asked.as_ref() != Some(&node.process)
         {
             return if node.bridge {
@@ -263,6 +272,13 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
         // by itself (`world-upgrade.md`, 换版不要人确认); a development build,
         // or a guardian of an earlier release, waits for an administrator,
         // and so does one that says why it will not, its reason kept.
+        // The bridge already serves; only now may a root upgrade replace the old unit.
+        #[cfg(target_os = "linux")]
+        if fastctx_platform::elevation::is_elevated()?
+            && !fastctx_install::service::guardian::status(&service).installed
+        {
+            fastctx_install::service::guardian::install(&service)?;
+        }
         let mut refused = None;
         let staged = !needs_guardian || service.guardian_staged(&plan.candidate.build.digest)? || {
             mend_signature(root, plan);
@@ -287,6 +303,7 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
             || restart_refusal.is_some()
             || (cfg!(target_os = "macos")
                 && !fastctx_platform::elevation::is_elevated()?
+                && !fastctx_install::service::guardian::status(&service).installed
                 && !fastctx_install::service::registered_hubs(root)?.is_empty())
         {
             phase(root, plan, Phase::AwaitingAdministrator)?;
@@ -398,7 +415,7 @@ fn mend_signature(root: &Path, plan: &Plan) {
 /// signed program first. Where neither can be done without an
 /// administrator, the administrator's step does it (`guardian_apply`).
 fn follow_hubs(root: &Path, digest: &str) -> anyhow::Result<()> {
-    if !cfg!(any(windows, target_os = "linux")) {
+    if !cfg!(any(windows, target_os = "linux", target_os = "macos")) {
         return Ok(());
     }
     for directory in fastctx_install::service::registered_hubs(root)? {
@@ -407,10 +424,12 @@ fn follow_hubs(root: &Path, digest: &str) -> anyhow::Result<()> {
             store::installed(root),
             &directory,
         );
-        if !hub.status()?.installed || (cfg!(windows) && hub.guardian_current(digest)?) {
+        if !hub.status()?.installed
+            || (fastctx_install::service::guardian::status(&hub).installed && hub.guardian_current(digest)?)
+        {
             continue;
         }
-        let ready = if cfg!(windows) {
+        let ready = if fastctx_install::service::guardian::status(&hub).installed {
             hub.adopt_guardian(digest)?
         } else {
             hub.may_restart()
@@ -485,6 +504,11 @@ fn transient(error: &std::io::Error) -> bool {
 }
 
 async fn guardian(root: &Path, graphical: bool) -> anyhow::Result<()> {
+    let initial =
+        fastctx_install::service::Service::new(fastctx_install::service::Kind::Node, store::installed(root), root);
+    if !fastctx_install::service::guardian::status(&initial).installed {
+        return crate::guardian::install_here(&initial, graphical || cfg!(windows));
+    }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = graphical;
     let plan = store::read(root)?.context("no local replacement was staged")?;
@@ -613,7 +637,12 @@ async fn guardian_apply(root: &Path, user_sid: Option<String>, uid: Option<u32>)
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        service.restart_guardian(&own.digest)?;
+        if !fastctx_install::service::guardian::status(&service).installed {
+            fastctx_install::service::guardian::install(&service)?;
+        } else {
+            service.renew_guardian(&own.digest)?;
+            service.restart_guardian(&own.digest)?;
+        }
         // A unit an earlier release installed has no rule letting its user
         // restart it; this approval leaves the one an install now does, so
         // it is the last a renewal here asks for.
@@ -629,6 +658,7 @@ async fn guardian_apply(root: &Path, user_sid: Option<String>, uid: Option<u32>)
                 &directory,
             );
             if hub.status()?.installed {
+                hub.install()?;
                 hub.restart_guardian(&own.digest)?;
                 if let Err(error) = hub.allow_restart(service.uid) {
                     eprintln!("the hub's user may not restart it by itself yet: {error:#}");

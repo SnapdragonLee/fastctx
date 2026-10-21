@@ -94,6 +94,17 @@ pub(crate) async fn delete_one(node: &Arc<Node>, name: &str) -> Result<u64, Stop
     }
     let bytes = measured.records.bytes + measured.output.bytes + measured.host.bytes;
     let Kind::Home(id) = &kind else {
+        if let Kind::Guest(owner) = &kind {
+            crate::guests::delete_room(
+                node,
+                fastctx_install::service::guests::Room {
+                    resident: owner.resident.clone(),
+                    machine: Some(owner.machine.clone()),
+                },
+            )
+            .await
+            .map_err(|error| Stop::Failed(error.message))?;
+        }
         remove_places(node, &measured).await?;
         return Ok(bytes);
     };
@@ -167,6 +178,9 @@ pub(crate) async fn delete_one(node: &Arc<Node>, name: &str) -> Result<u64, Stop
         fastctx_platform::Permissions::Private,
     )
     .map_err(|error| Stop::Failed(format!("recording that it is being deleted: {error}")))?;
+    crate::guests::delete_room(node, fastctx_install::service::guests::Room { resident: id.clone(), machine: None })
+        .await
+        .map_err(|error| Stop::Failed(error.message))?;
     let completed = node.world.conversation(id).path().join("host-deleted");
     if !completed.try_exists().map_err(|error| Stop::Failed(error.to_string()))? {
         host(node, &resident.about, &measured).await?;

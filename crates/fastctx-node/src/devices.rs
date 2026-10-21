@@ -74,6 +74,7 @@ pub fn admit(view: &View, from: &MachineName, call: &RemoteCall) -> Result<(), F
             | RemoteCall::Folders { .. }
             // How a machine of the user's is doing, for its details page.
             | RemoteCall::Stats { .. }
+            | RemoteCall::HomePrivacy { .. }
             // A machine of the user's updated, from its details page.
             | RemoteCall::UpdateWorld
             | RemoteCall::Updates { .. }
@@ -92,6 +93,7 @@ pub fn admit(view: &View, from: &MachineName, call: &RemoteCall) -> Result<(), F
             | RemoteCall::ChangeAgentLogin { .. }
             | RemoteCall::ReadAgentLimits { .. }
             | RemoteCall::AgentUsage { .. }
+            | RemoteCall::AgentCalls { .. }
             // What is there, as the account may see it.
             | RemoteCall::Agents
             | RemoteCall::Look { .. }

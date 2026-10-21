@@ -1237,6 +1237,10 @@ fn ask(hub: &Arc<Hub>, name: &MachineName, question: Question) -> Result<Told, S
             Err("release reads are dispatched asynchronously".into())
         }
         Question::Directory => Ok(Told::Directory { view: Box::new(hub.view_for(name)) }),
+        Question::GuestAccountsDeleted { ids } => {
+            crate::guest_accounts::settled(hub, name, &ids)?;
+            Ok(Told::Done)
+        }
         Question::Manage { .. } => Err("changes are made as they come".into()),
         Question::LedgerWrite { .. } => Err("ledger entries are written as they come".into()),
         Question::LedgerTowns => {

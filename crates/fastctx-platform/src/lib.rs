@@ -69,6 +69,8 @@ pub mod unix_account;
 pub mod unix_executable;
 #[cfg(unix)]
 mod unix_fds;
+#[cfg(unix)]
+pub use unix_fds::close_on_exec_from;
 pub mod unix_socket;
 pub mod viewed_cache;
 #[cfg(windows)]
@@ -93,4 +95,4 @@ pub use private::ensure_private_dir;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 pub use tree::ProcessTree;
 #[cfg(windows)]
-pub use windows_user::{account_name, current_user_sid};
+pub use windows_user::{account_name, current_user_sid, file_owner_sid, object_owner_sid, token_user_sid};

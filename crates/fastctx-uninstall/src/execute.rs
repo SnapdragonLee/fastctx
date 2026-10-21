@@ -187,7 +187,7 @@ pub async fn run(mut request: Request, mut events: impl FnMut(Event)) -> anyhow:
                 | Action::ClaudeWorkCache { .. }
                 | Action::ClaudeSessionCache { .. }
         ) && !hosts_withdrawn
-            && !matches!(&step.action, Action::Delete(path) if path == &world.node_service())
+            && !matches!(&step.action, Action::Delete(path) if path == &world.node_service() || path == &request.installation.root.join(fastctx_install::guest_privacy::MARKER))
         {
             Err(anyhow::anyhow!(
                 "a host integration could not be withdrawn; its restoration records and program assets must remain for retry"

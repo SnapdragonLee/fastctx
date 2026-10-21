@@ -233,6 +233,9 @@ pub struct Project {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
+    /// Absent only in a view from a hub predating stable account identities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<fastctx_types::guest::AccountId>,
     pub name: AccountName,
     /// A level a later hub adds is read as the most careful this release
     /// knows (`fastctx_types::tolerant`).
@@ -610,6 +613,12 @@ impl Directory {
 /// One member's view of its hub's directory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct View {
+    /// Stable account ids and acknowledged account-deletion notifications.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guest_accounts: bool,
+    /// Only accounts whose assistance this machine hosted are included.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deleted_guest_accounts: Vec<fastctx_types::guest::Principal>,
     /// Whether this hub supports `Question::MachineLog`. Older hubs omit it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub machine_log: bool,
@@ -747,6 +756,8 @@ impl View {
     /// An empty view, before the hub has given one.
     pub fn empty(hub: HubId, hub_name: HubName, me: MachineName) -> Self {
         Self {
+            guest_accounts: false,
+            deleted_guest_accounts: Vec::new(),
             machine_log: false,
             hub,
             hub_name,

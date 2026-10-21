@@ -61,6 +61,9 @@ pub struct About {
     /// Whom it works for.
     #[serde(default)]
     pub acting: crate::access::Acting,
+    /// Durable account identities captured at birth, separate from routing names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub principals: Vec<crate::guest::Principal>,
     /// The machines and folders the user points it to.
     #[serde(default, skip_serializing_if = "crate::focus::Focus::is_empty")]
     pub focus: crate::focus::Focus,

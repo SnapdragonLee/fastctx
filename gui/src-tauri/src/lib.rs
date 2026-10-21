@@ -677,6 +677,16 @@ async fn machine_stats(
     shell.world().stats(machine(machine_name)?, after).await.map_err(|error| error.to_string())
 }
 
+/// The owner's home permissions; only the explicit action changes them.
+#[fastctx_gui_command::command]
+async fn home_privacy(
+    shell: tauri::State<'_, Shell>,
+    machine_name: Option<String>,
+    harden: bool,
+) -> Result<fastctx_types::stats::HomePrivacy, String> {
+    shell.world().home_privacy(machine(machine_name)?, harden).await.map_err(|error| error.to_string())
+}
+
 /// Archives a conversation or brings it back, lets it sleep, wakes it or
 /// moves it to another project, or points it at machines and folders, as
 /// the user; each stage is answered as it went.
@@ -1220,6 +1230,7 @@ pub fn run() {
             logins::read_agent_limits,
             logins::set_agent_title,
             logins::agent_usage,
+            logins::agent_calls,
             world_watch::world_now,
             world_watch::world_watch,
             since,
@@ -1260,6 +1271,7 @@ pub fn run() {
             find_files,
             folders,
             machine_stats,
+            home_privacy,
             accounts::rename_here,
             accounts::hub_proxy,
             pages::page_read,

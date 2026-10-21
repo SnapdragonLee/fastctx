@@ -248,6 +248,12 @@ pub enum Call {
     },
     /// How a machine, or this computer, is doing, for its details page;
     /// with `after`, its lines bring only what came since then.
+    /// Inspect the node owner's home permissions; harden only on the user's explicit action.
+    HomePrivacy {
+        machine: Option<MachineName>,
+        #[serde(default)]
+        harden: bool,
+    },
     Stats {
         machine: Option<MachineName>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +393,13 @@ pub enum Call {
         machine: MachineName,
         agent: AgentName,
         dir: std::path::PathBuf,
+    },
+    /// Up to one hundred request records, newest first, redacted for this reader.
+    AgentCalls {
+        machine: MachineName,
+        agent: AgentName,
+        dir: std::path::PathBuf,
+        query: crate::usage_calls::UsageCallsQuery,
     },
     /// One resident or job in detail, by its id, from every machine that
     /// has it (`fastctx w <id>`).
@@ -719,6 +732,7 @@ pub enum Reply {
     FilesFound(crate::file_search::FileSearchReply),
     Folders(crate::focus::Folders),
     Stats(Box<crate::stats::MachineStats>),
+    HomePrivacy(crate::stats::HomePrivacy),
     /// What Claude Code on `machine` now records; `changed` is false when it
     /// already said so.
     ClaudeConsent {
@@ -804,6 +818,7 @@ pub enum Reply {
     AgentLogins(crate::logins::WorldLogins),
     MachineAgentLogins(Box<crate::logins::MachineLogins>),
     AgentUsage(Box<crate::usage::UsageReport>),
+    AgentCalls(Box<crate::usage_calls::UsageCallsPage>),
     AgentChangePreview(Box<crate::logins::ChangePreview>),
     AgentLoginChanged(Box<crate::logins::LoginChange>),
     Towns {

@@ -48,6 +48,7 @@ mod forget;
 mod gate_waits;
 mod gates;
 mod gather;
+mod guests;
 pub mod handoff;
 mod held_history;
 mod here;
@@ -628,7 +629,9 @@ pub async fn run_prepared(
     profile::session::start(&node);
     updates::start(&node);
     afoot::start(&node);
+    usage::watch(&node);
     forget::start(&node);
+    guests::start(&node);
     let jobs_node = node.clone();
     tokio::spawn(async move {
         let mut again = again::Again::default();
