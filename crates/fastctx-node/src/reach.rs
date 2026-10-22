@@ -176,13 +176,11 @@ impl Node {
         &self,
         link: &Link,
         town: Option<&fastctx_types::TownName>,
-    ) -> Option<fastctx_types::TownName> {
-        let town = town?;
-        crate::ledger::names::place(&self.world, town)
-            .ok()
-            .flatten()
-            .filter(|place| place.hub == link.membership().id)
-            .map(|_| town.clone())
+    ) -> Result<Option<fastctx_types::TownName>, Failure> {
+        let Some(town) = town else { return Ok(None) };
+        let place = crate::ledger::names::place(&self.world, town)
+            .map_err(|error| Failure::new(format!("reading the project {town}'s hub: {error}")))?;
+        Ok(place.filter(|place| place.hub == link.membership().id).map(|_| town.clone()))
     }
 
     /// Whether scripts may start on this computer for `acting`: for a
@@ -191,21 +189,7 @@ impl Node {
     /// works elsewhere (`world-network.md`, 共享机器与智能体协助); when not,
     /// why.
     pub(crate) fn works_here(&self, acting: &Acting) -> Result<(), String> {
-        let Acting::Accounts { accounts } = acting else { return Ok(()) };
-        let may = accounts.iter().any(|account| {
-            self.link_of(&account.hub).is_some_and(|link| {
-                let view = link.view();
-                view.logged_in(&view.me, &account.account) || view.rights(&account.account, &view.me).hands
-            })
-        });
-        if may {
-            return Ok(());
-        }
-        // The computer goes unnamed: it is not one the session may use
-        // (`world-network.md`, 一个居民替谁干活).
-        let names: Vec<&str> = accounts.iter().map(|account| account.account.as_str()).collect();
-        let whom = if names.len() == 1 { "the account" } else { "the accounts" };
-        Err(format!("{whom} {} may not work on the computer this session runs on", names.join(", ")))
+        self.authorize_here(acting).map_err(|failure| failure.message)
     }
 
     /// Calls `to`, for whom `acting` works, asking `purpose` of it: for each
@@ -283,7 +267,13 @@ impl Node {
                 why.push(format!("this works for no account of the hub {hub}, which {} is on", to.name));
                 continue;
             }
-            let view = link.view();
+            let view = match crate::authorization::current_view(&link) {
+                Ok(view) => view,
+                Err(failure) => {
+                    why.push(failure.message);
+                    continue;
+                }
+            };
             // This computer as that hub calls it.
             let here = &view.me;
             for account in accounts {

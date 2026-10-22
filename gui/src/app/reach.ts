@@ -89,7 +89,8 @@ export function machinesOf(world: WorldNow | null): Machine[] {
   const machines: Machine[] = [];
   const byWritten = new Map<string, Machine>();
   if (nodes.facts) {
-    // Whoever the user is logged in as here, this computer is theirs to use.
+    // This computer, as the node says each login may use it; a node before
+    // it said so is taken to give each login here the whole of it.
     const here: Machine = {
       name: nodes.machine,
       written: nodes.machine,
@@ -98,7 +99,12 @@ export function machinesOf(world: WorldNow | null): Machine[] {
       since: null,
       through: null,
       facts: { Ok: nodes.facts },
-      on: nodes.hubs.map((hub) => ({ hub: hub.hub, hubName: hub.name, owner: hub.home, rights: hub.logins.map((account) => [account, all]) })),
+      on: nodes.hubs.map((hub) => ({
+        hub: hub.hub,
+        hubName: hub.name,
+        owner: hub.home,
+        rights: hub.here?.length ? hub.here : hub.logins.map((account): [AccountName, Rights] => [account, all]),
+      })),
     };
     machines.push(here);
     byWritten.set(here.written, here);
@@ -140,8 +146,7 @@ export function machinesOf(world: WorldNow | null): Machine[] {
 /** What `login` may do on `machine`. */
 export function rightsOn(machine: Machine, login: Login): Rights {
   const on = machine.on.find((on) => on.hub === login.hub);
-  const found = on?.rights.find(([account]) => account === login.account)?.[1];
-  return found ?? (machine.here ? all : { hands: false, agents: false });
+  return on?.rights.find(([account]) => account === login.account)?.[1] ?? { hands: false, agents: false };
 }
 
 /** Whether `machine` is registered under `login`'s account. */
@@ -275,11 +280,11 @@ export function workPlaces(world: WorldNow | null, lives: Machine, login: Login 
   });
 }
 
-/** Where files an assisting agent is given may go: the machines the account it
- *  works for may work on, this computer only where it is the account's own
- *  machine, for only a machine can take them. */
+/** Where files an assisting agent is given may go: the account's own
+ *  machines it may work on, never one shared to it, whose owner's disk the
+ *  original is not to land on (`world-run.md`, 受协助的人附的文件). */
 export function filePlaces(world: WorldNow | null, login: Login): Machine[] {
-  return machinesOf(world).filter((machine) => (machine.here ? owns(machine, login) : rightsOn(machine, login).hands));
+  return machinesOf(world).filter((machine) => owns(machine, login) && (machine.here || rightsOn(machine, login).hands));
 }
 
 /** Where files other than images go for an assisting agent, which works on no

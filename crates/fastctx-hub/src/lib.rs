@@ -40,8 +40,10 @@ mod manage;
 mod moving;
 mod outq;
 mod project_deletions;
+mod project_entry;
 mod records;
 mod releases;
+mod renewal;
 mod store;
 pub mod third;
 mod updates;
@@ -255,6 +257,7 @@ pub(crate) struct Hub {
 
 /// A member's open control connection.
 pub(crate) struct Session {
+    call_details: bool,
     generation: u64,
     out: outq::Outq,
     since: Timestamp,
@@ -279,6 +282,7 @@ pub(crate) struct Session {
     cancels: bool,
     /// Whether it reads who is online as it changes (`Down::Presence`).
     presence: bool,
+    project_entry: bool,
 }
 
 pub(crate) enum Out {
@@ -593,6 +597,8 @@ async fn serving(dir: &Path, kept: Option<Kept>, log: Arc<log::Log>) -> anyhow::
     }
     let settled = dissolve::settled(&hub);
     tokio::pin!(settled);
+    let replaced = renewal::replaced();
+    tokio::pin!(replaced);
     let switched = loop {
         tokio::select! {
             accepted = kept.listener.accept() => match accepted {
@@ -608,6 +614,10 @@ async fn serving(dir: &Path, kept: Option<Kept>, log: Arc<log::Log>) -> anyhow::
                 }
             },
             () = shutdown_signal() => break false,
+            version = &mut replaced => {
+                hub.log.line(format_args!("the program this hub runs from is {version} now: stopping for its service to start it on that"));
+                break false;
+            }
             expired = machine_log::expire(&hub) => expired?,
             ended = assists::expire(&hub) => ended?,
             Ok(()) = &mut switch => break true,
@@ -756,12 +766,14 @@ async fn intended(
                 versions,
                 due,
                 project_deletes,
+                project_entry,
                 conversation_deletions,
                 profiles,
                 left,
                 cancels,
                 presence,
                 parts,
+                call_details,
             },
         ) => {
             let said = control::Said {
@@ -777,12 +789,14 @@ async fn intended(
                 versions,
                 due,
                 project_deletes,
+                project_entry,
                 conversation_deletions,
                 profiles,
                 left,
                 cancels,
                 presence,
                 parts,
+                call_details,
             };
             control::session(hub, socket, peer, binding, key, proof, letters, said).await;
         }

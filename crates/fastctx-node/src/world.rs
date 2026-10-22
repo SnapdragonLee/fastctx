@@ -583,6 +583,9 @@ pub fn facts(node: &Node) -> MachineFacts {
         attachment_references: true,
         stats: true,
         mcp: true,
+        mcp_import: true,
+        page_accounts: true,
+        attachment_places: true,
         shell: shell(),
         form: Some(form()),
         node_lifetime: Some(Box::new(node.lifetime.clone())),
@@ -651,6 +654,10 @@ struct Handler {
 }
 
 impl fastctx_net::link::Node for Handler {
+    fn login_homes(&self, agent: &fastctx_types::AgentName) -> Result<Vec<(std::path::PathBuf, bool)>, String> {
+        let node = self.node.upgrade().ok_or("the node is stopping")?;
+        crate::logins::identities(&node, agent).map_err(|error| error.message)
+    }
     fn place(
         &self,
         machine: &MachineName,
@@ -694,6 +701,11 @@ impl fastctx_net::link::Node for Handler {
                 return Err(Failure::new("the node is stopping"));
             };
             let link = node.link_of(&hub).ok_or_else(|| Failure::new("the link that brought the call is gone"))?;
+            if let Some(town) = crate::admission::town_of(&call)
+                && link.view().project_named(&caller.account, town).is_none()
+            {
+                link.refresh().await.map_err(Failure::new)?;
+            }
             let asker = match crate::admission::admit(&node, &link, &caller, &call) {
                 Ok(asker) => asker,
                 Err(refused) => {
@@ -744,9 +756,11 @@ impl fastctx_net::link::Node for Handler {
                     let stream = stream.ok_or_else(|| Failure::new("MCP requires a data connection"))?;
                     crate::mcp::serve(&node, &hub, &caller.account, &name, stream).await.map(|()| RemoteReply::Set)
                 }
-                RemoteCall::PageAction { source, action } => crate::pages::actions::answer(&node, source, action)
-                    .await
-                    .map(|result| RemoteReply::PageAction { result }),
+                RemoteCall::PageAction { source, action } => {
+                    crate::pages::actions::answer(&node, &asker, source, action)
+                        .await
+                        .map(|result| RemoteReply::PageAction { result })
+                }
                 RemoteCall::Relay { made } => crate::devices::relay(&node, &asker, made).await,
                 // A resident of the calling machine works here (`world-run.md`,
                 // 这里).
@@ -988,6 +1002,13 @@ impl fastctx_net::link::Node for Handler {
                         .map(|heads| RemoteReply::Canon { heads })
                         .map_err(|error| Failure::new(format!("reading the canon on {machine}: {error}")))
                 }
+                RemoteCall::EnterProject { resident, town } => {
+                    let account =
+                        fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::town::enter::here(&node, &resident, &town, Some(&account))
+                        .await
+                        .map(|map| RemoteReply::Entered { town, map: Box::new(map) })
+                }
                 RemoteCall::Facts => Ok(RemoteReply::Facts(facts(&node))),
                 RemoteCall::AttachmentReferences { conversation, attachments } => {
                     if !node.is_me(&conversation.machine)
@@ -1037,13 +1058,18 @@ impl fastctx_net::link::Node for Handler {
                         .await
                         .map(RemoteReply::Copied)
                 }
+                RemoteCall::AttachmentPlaces { target, preferred } => {
+                    crate::attachments::destinations::places(&node, &from, &target, &acting, preferred.as_ref())
+                        .map(RemoteReply::AttachmentPlaces)
+                }
                 RemoteCall::ReserveAttachment { target, file, operation, composer } => {
-                    crate::attachments::sent::reserve(&node, &from, &from, target, file, operation, composer)
+                    crate::attachments::check_project(&node, &acting, &target).await?;
+                    crate::attachments::sent::reserve(&node, &from, &from, &acting, target, file, operation, composer)
                         .await
                         .map(RemoteReply::Uploaded)
                 }
                 RemoteCall::CommitAttachment { attachment, preview } => {
-                    crate::attachments::sent::commit(&node, &from, attachment, preview)
+                    crate::attachments::sent::commit(&node, &from, &acting, attachment, preview)
                         .await
                         .map(crate::attachments::remote_reply)
                 }
@@ -1055,8 +1081,9 @@ impl fastctx_net::link::Node for Handler {
                         .map(RemoteReply::Uploaded)
                 }
                 RemoteCall::Upload { target, file, composer, resumes } => {
+                    crate::attachments::check_project(&node, &acting, &target).await?;
                     let stream = stream.ok_or_else(|| Failure::new("an upload requires its data connection"))?;
-                    crate::attachments::receive(&node, &from, target, file, composer, resumes, stream)
+                    crate::attachments::receive(&node, &from, &acting, target, file, composer, resumes, stream)
                         .await
                         .map(crate::attachments::remote_reply)
                 }
@@ -1200,13 +1227,7 @@ impl fastctx_net::link::Node for Handler {
                 node.log.line(format_args!("taking the projects' ledgers: {error}; trying again"));
                 tokio::time::sleep(again.next()).await;
             }
-            // What this computer keeps of projects it does not span is kept
-            // as current as the rest (`world-network.md`, 隔着网络也要顺手).
-            if let Some(link) = node.link_of(&hub)
-                && let Err(error) = crate::ledger::query::follow(&node, &link, town.as_ref()).await
-            {
-                node.log.line(format_args!("taking the ledgers of projects this computer does not span: {error}"));
-            }
+
             node.shown_changed();
         });
     }
@@ -1259,11 +1280,24 @@ impl fastctx_net::link::Node for Handler {
         // The machines each session may use are in its tools' descriptions.
         node.tools_changed(None);
         node.views_changed();
+        let contexts = node.clone();
+        tokio::spawn(async move { crate::focus::refresh_all(&contexts).await });
         // A project shared with an account here since is taken to be listed.
         if let Some(link) = node.link_of(&self.hub) {
             tokio::spawn(async move {
-                if let Err(error) = crate::ledger::query::follow_view(&node, &link).await {
-                    node.log.line(format_args!("taking a project shared with this computer: {error}"));
+                crate::ledger::letgo::let_go(&node, &link).await;
+                let mut again = crate::again::Again::default();
+                loop {
+                    match crate::ledger::sync(&node, link.hub(), None).await {
+                        Ok(()) => break,
+                        Err(error) => {
+                            node.log.line(format_args!("taking the projects of this computer's accounts: {error}"));
+                            if !matches!(link.status(), Status::Online { .. }) {
+                                break;
+                            }
+                            tokio::time::sleep(again.next()).await;
+                        }
+                    }
                 }
                 // One deleted, or no longer this computer's to keep, goes.
                 crate::ledger::letgo::let_go(&node, &link).await;
@@ -1354,7 +1388,7 @@ pub fn grouped_machines(
     let mut groups: Vec<fastctx_types::world::MachineGroup> = Vec::new();
     let mut keys = Vec::new();
     for link in node.links() {
-        let view = link.view();
+        let Ok(view) = crate::authorization::current_view(&link) else { continue };
         let accounts = node.accounts_on(&link, acting);
         let mut put = |machine: &fastctx_net::directory::Member, written: &str| {
             if let (Some(group), Some(owner)) = (&machine.group, &machine.home) {
@@ -1380,7 +1414,7 @@ pub fn grouped_machines(
                 }
                 continue;
             }
-            if accounts.iter().any(|account| view.rights(account, &machine.name).hands) {
+            if view.account_for(&accounts, &view.me, &machine.name, Purpose::Hands).is_some() {
                 keys.push(machine.key);
                 let written = node.written(&link, &machine.name).to_string();
                 put(machine, &written);

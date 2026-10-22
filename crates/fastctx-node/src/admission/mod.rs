@@ -41,7 +41,8 @@ pub struct Asker {
 /// The resident of this machine `call` is about, if it is about one.
 fn resident_of(call: &RemoteCall) -> Option<&ResidentId> {
     match call {
-        RemoteCall::Talk { to: who, .. }
+        RemoteCall::EnterProject { resident: who, .. }
+        | RemoteCall::Talk { to: who, .. }
         | RemoteCall::Composer { resident: who, .. }
         | RemoteCall::Watch { resident: who, .. }
         | RemoteCall::Stop { resident: who }
@@ -51,19 +52,20 @@ fn resident_of(call: &RemoteCall) -> Option<&ResidentId> {
         | RemoteCall::ItemDetail { resident: who, .. }
         | RemoteCall::AgentActivity { resident: who, .. } => Some(who),
         RemoteCall::CommitAttachment { attachment, .. } => Some(&attachment.conversation().resident),
-        RemoteCall::Upload { target, .. } | RemoteCall::ReserveAttachment { target, .. } => {
-            match target.conversation_target() {
-                fastctx_types::attachments::UploadTarget::Resident { resident } => Some(resident),
-                _ => None,
-            }
-        }
+        RemoteCall::AttachmentPlaces { target, .. }
+        | RemoteCall::Upload { target, .. }
+        | RemoteCall::ReserveAttachment { target, .. } => match target.conversation_target() {
+            fastctx_types::attachments::UploadTarget::Resident { resident } => Some(resident),
+            _ => None,
+        },
         _ => None,
     }
 }
 
 /// The project `call` is about, if it names one.
-fn town_of(call: &RemoteCall) -> Option<&TownName> {
+pub(crate) fn town_of(call: &RemoteCall) -> Option<&TownName> {
     match call {
+        RemoteCall::EnterProject { town, .. } => Some(town),
         RemoteCall::Run { town, .. }
         | RemoteCall::Write { town, .. }
         | RemoteCall::Ask { town, .. }
@@ -76,13 +78,13 @@ fn town_of(call: &RemoteCall) -> Option<&TownName> {
         | RemoteCall::PipeOut { origin, .. } => origin.town.as_ref(),
         RemoteCall::PageAction { source, .. } => Some(&source.town),
         RemoteCall::Place { attachment, .. } => attachment.town.as_ref(),
-        RemoteCall::Upload { target, .. } | RemoteCall::ReserveAttachment { target, .. } => {
-            match target.conversation_target() {
-                fastctx_types::attachments::UploadTarget::New { town, .. }
-                | fastctx_types::attachments::UploadTarget::Draft { town, .. } => town.as_ref(),
-                _ => None,
-            }
-        }
+        RemoteCall::AttachmentPlaces { target, .. }
+        | RemoteCall::Upload { target, .. }
+        | RemoteCall::ReserveAttachment { target, .. } => match target.conversation_target() {
+            fastctx_types::attachments::UploadTarget::New { town, .. }
+            | fastctx_types::attachments::UploadTarget::Draft { town, .. } => town.as_ref(),
+            _ => None,
+        },
         RemoteCall::Manage { action: Management::Move { town: Some(town) }, .. } => Some(town),
         _ => None,
     }
@@ -101,13 +103,21 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
     if reached.is_some_and(|owner| !node.is_me(&owner.machine)) {
         return Err(refuse("the attachment names a different holding machine".into()));
     }
-    let view = link.view();
+    let view = crate::authorization::current_view(link)?;
     if let RemoteCall::AttachmentReferences { attachments, .. } = call
         && attachments.iter().any(|file| !view.same(&file.owner.machine, &caller.machine))
     {
         return Err(refuse("only the original holder may query its attachment references".into()));
     }
-    view.admits(&caller.machine, &caller.account, &here, call.purpose()).map_err(refuse)?;
+    view.authorize(
+        &caller.account,
+        fastctx_net::authorization::Action::Call { from: &caller.machine, to: &here, purpose: call.purpose() },
+    )
+    .map_err(|denial| {
+        let mut failure = Failure::from(denial);
+        failure.message = format!("{here} refused {}: {}", caller.machine, failure.message);
+        failure
+    })?;
     let agents_here = matches!(
         call,
         RemoteCall::ScanAgents { .. }
@@ -150,6 +160,9 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
             return Err(refuse(format!("the account {} may not use the project {town}", caller.account)));
         }
     }
+    if matches!(call, RemoteCall::EnterProject { .. }) && !view.rights(&caller.account, &caller.machine).hands {
+        return Err(refuse("the requesting job no longer has work permission on its machine".into()));
+    }
     let hands = view.rights(&caller.account, &here).hands;
     // A conversation's attachments are seen by the accounts it works for
     // alone (`seen`); a draft's, which no conversation holds yet, by whoever
@@ -185,7 +198,7 @@ pub fn admit(node: &Arc<Node>, link: &Arc<Link>, caller: &Caller, call: &RemoteC
     // Of another's machine, an account its agents' logins assist uses
     // those logins alone (`world-network.md`, 共享机器与智能体协助).
     let login = |agent: &fastctx_types::AgentName, home: Option<&std::path::Path>| {
-        if hands || view.may_use_login(&caller.account, &here, agent, home) {
+        if hands || crate::homes::may_use_login(node, &view, &caller.account, &here, agent, home)? {
             return Ok(());
         }
         let login = home.map(|home| home.display().to_string()).unwrap_or_else(|| "default".to_string());

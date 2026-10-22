@@ -117,6 +117,8 @@ export class Updates {
       },
       (error: unknown) => {
         this.installing = false;
+        // The shell told the node, which keeps it, and when to try it again,
+        // past this window.
         this.failed = { version, step: "install", why: String(error) };
         this.refresh();
       },
@@ -152,7 +154,7 @@ export class Updates {
     this.offered.set(offered);
     if (state) this.tell(state, offered);
     if (!state || !offered || this.installing) return;
-    const asked = state.take === offered.manifest.version;
+    const asked = state.take === offered.manifest.version || this.unfinished(state, offered.manifest.version);
     // The node says which release automatic updates may take; a node before
     // it said so is reckoned with here, under the hubs' major version.
     const within =
@@ -198,6 +200,17 @@ export class Updates {
     });
   }
 
+  /** Whether `version` was begun here and failed: updating by itself
+   *  decides whether a release is begun, not whether one that failed is
+   *  finished, which is tried again on its schedule and installed once
+   *  nothing is under way (`world-upgrade.md`, 没成的，自己再试). */
+  private unfinished(state: UpdateState, version: string): boolean {
+    const target = state.app?.target;
+    const failed = state.failed;
+    const refused = failed?.reason?.kind === "no_package" || failed?.reason?.kind === "not_newer";
+    return this.failed?.version === version || (!!failed && !refused && failed.version === version && failed.target === target);
+  }
+
   /** Whether this device takes new releases by itself, as its node says. */
   private automatic(state: UpdateState): boolean {
     return state.auto ?? state.settings.auto;
@@ -222,15 +235,19 @@ export class Updates {
         stage: { kind: "fetching", received: fetching.received, total: fetching.total ?? pack.size ?? null, network: fetching.via === "network" },
       };
     }
-    if (state.kept?.some((kept) => kept.version === manifest.version && kept.target === target)) {
-      if (this.permission) return { ...base, stage: { kind: "permission" } };
-      const waits = this.automatic(state) || state.take === manifest.version;
-      return { ...base, stage: { kind: waits ? "waiting" : "ready" } };
-    }
+    // One that failed here waits for its time to be tried again, its
+    // package kept or not.
     const failed = state.failed;
-    if (failed && failed.version === manifest.version && failed.target === target) {
+    const ofThis = failed && failed.version === manifest.version && failed.target === target;
+    if (ofThis && state.retry_at && Date.parse(state.retry_at) > Date.now()) {
       return { ...base, stage: { kind: "failed", why: failed.why, ...(failed.reason ? { reason: failed.reason } : {}) } };
     }
+    if (state.kept?.some((kept) => kept.version === manifest.version && kept.target === target)) {
+      if (this.permission) return { ...base, stage: { kind: "permission" } };
+      const waits = this.automatic(state) || state.take === manifest.version || this.unfinished(state, manifest.version);
+      return { ...base, stage: { kind: waits ? "waiting" : "ready" } };
+    }
+    if (ofThis) return { ...base, stage: { kind: "failed", why: failed.why, ...(failed.reason ? { reason: failed.reason } : {}) } };
     return { ...base, stage: { kind: "offered" } };
   }
 }

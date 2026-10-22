@@ -14,7 +14,6 @@ use fastctx_net::envelope::{Envelope, Kind};
 use fastctx_net::sign::{PublicKey, Signature};
 use fastctx_net::wire::{self, CallStatus, Change, Down, HEARTBEAT, Letters, Question, Refusal, SILENCE, Told, Up};
 use fastctx_types::access::Purpose;
-use fastctx_types::remote::RemoteCall;
 use fastctx_types::{AccountName, AgentName, MachineName};
 use futures_util::{SinkExt as _, StreamExt as _};
 use jiff::Timestamp;
@@ -26,6 +25,7 @@ use crate::{Hub, Out, Session, Socket, refuse, storage_failure};
 
 /// What a member says of itself when its session opens.
 pub(crate) struct Said {
+    pub call_details: bool,
     /// The machine that forwards its connection here, if any.
     pub through: Option<String>,
     /// Whether it can take direct connections.
@@ -51,6 +51,7 @@ pub(crate) struct Said {
     pub due: bool,
     /// Whether it reads the records of projects deleted.
     pub project_deletes: bool,
+    pub project_entry: bool,
     pub conversation_deletions: bool,
     /// Whether it reads the records of profiles written.
     pub profiles: bool,
@@ -72,13 +73,24 @@ pub(crate) struct Standing {
     pub account: AccountName,
     pub to: MachineName,
     pub purpose: Purpose,
+    pub project_entry: Option<(fastctx_types::ResidentId, fastctx_types::TownName)>,
 }
 
 impl Standing {
     /// Why it no longer holds, if it does not.
     pub fn lapsed(&self, hub: &Hub) -> Option<String> {
         let store = hub.store();
-        store.book.directory.admits(&self.from, &self.account, &self.to, self.purpose).err()
+        store
+            .book
+            .directory
+            .admits(&self.from, &self.account, &self.to, self.purpose)
+            .and_then(|()| match &self.project_entry {
+                Some((resident, town)) => {
+                    crate::project_entry::check(&store, &self.from, &self.account, &self.to, resident, town)
+                }
+                None => Ok(()),
+            })
+            .err()
     }
 }
 
@@ -532,6 +544,7 @@ fn open(
     out.welcome(welcome);
     crate::mailbox::opened(hub, &mut store, name, numbering, generation, out.clone(), taken_by_member);
     let session = Session {
+        call_details: said.call_details,
         generation,
         out,
         since: now,
@@ -545,6 +558,7 @@ fn open(
         versions: said.versions,
         cancels: said.cancels,
         presence: said.presence,
+        project_entry: said.project_entry,
     };
     let replaced = hub.sessions().insert(name.clone(), session);
     drop(store);
@@ -846,7 +860,11 @@ fn canonical_address(hub: &Hub, address: fastctx_types::Address) -> fastctx_type
 fn standing(hub: &Hub, message: &Envelope) -> Result<Standing, String> {
     let (account, purpose) = message.standing()?;
     let (from, to) = (canonical(hub, &message.from), canonical(hub, &message.to));
-    let standing = Standing { from, account: account.clone(), to, purpose };
+    let project_entry = fastctx_net::message::project_entry(message);
+    if project_entry.is_some() && purpose != Purpose::Echo {
+        return Err("a project entry must return to its conversation as a job request".into());
+    }
+    let standing = Standing { from, account: account.clone(), to, purpose, project_entry };
     match standing.lapsed(hub) {
         Some(why) => Err(why),
         None => Ok(standing),
@@ -1008,18 +1026,23 @@ async fn keep(
     })
 }
 
-/// The call an envelope carries, when it carries one whole.
-fn carried_call(message: &Envelope) -> Option<RemoteCall> {
-    match message.body::<fastctx_net::message::Body>().ok()? {
-        fastctx_net::message::Body::Call { call } | fastctx_net::message::Body::StreamCall { call } => Some(call),
-        _ => None,
+/// The same authorization facts for an inline call and one carried over a data connection.
+fn call_details(message: &Envelope, target_verifies: bool) -> Result<fastctx_net::call_details::CallDetails, String> {
+    use fastctx_net::{call_details::CallDetails, message::Body};
+    match message.body::<Body>().map_err(|error| error.to_string())? {
+        Body::Call { call } | Body::StreamCall { call } => Ok(CallDetails::of(&message.from, &call)),
+        Body::LargeCall { details, .. } => {
+            let details = details.ok_or("upgrade the sender: its large call has no authorization facts")?;
+            if message.purpose != Some(details.purpose) {
+                return Err("the large call's purpose differs from its authorization facts".into());
+            }
+            if !target_verifies {
+                return Err(format!("upgrade {}: it cannot verify a large call's authorization facts", message.to));
+            }
+            Ok(details)
+        }
+        _ => Err("the envelope does not carry a call".into()),
     }
-}
-
-/// The resident a call asks the machine it goes to to work for, when it
-/// names one (`fastctx_net::message::worked_for`).
-fn worked_for(message: &Envelope) -> Option<fastctx_types::Address> {
-    fastctx_net::message::worked_for(&message.from, &carried_call(message)?)
 }
 
 /// Keeps what `name` says of how its lines go, and tells the members to
@@ -1061,11 +1084,38 @@ fn echoes_work(hub: &Hub, message: &Envelope) -> bool {
     directory.admits_echo(&message.from, account, &message.to).is_ok() && store.worked.contains(&(from, resident))
 }
 
-/// The agent's login a call starts a session of, if it starts one: a
-/// session opened for the user, or a colleague asked; none is the agent's
-/// default login there.
-fn login_asked(message: &Envelope) -> Option<(AgentName, Option<std::path::PathBuf>)> {
-    fastctx_net::message::login_asked(&carried_call(message)?)
+/// The call a message carries, when it carries one.
+fn carried_call(message: &Envelope) -> Option<fastctx_types::remote::RemoteCall> {
+    match message.body::<fastctx_net::message::Body>().ok()? {
+        fastctx_net::message::Body::Call { call } | fastctx_net::message::Body::StreamCall { call } => Some(call),
+        _ => None,
+    }
+}
+
+/// Preparing a draft's non-image attachment already works for its account:
+/// the host forwards it to that account's storage before a model starts.
+fn upload_login(hub: &Hub, message: &Envelope, standing: &Standing) -> Option<(AgentName, Option<std::path::PathBuf>)> {
+    let fastctx_types::remote::RemoteCall::Upload { target, file, .. } = carried_call(message)? else { return None };
+    if file.media_type.starts_with("image/") {
+        return None;
+    }
+    let agent = match target.conversation_target() {
+        fastctx_types::attachments::UploadTarget::New { agent, .. } => agent.clone(),
+        fastctx_types::attachments::UploadTarget::Draft { resident, .. } => resident.agent(),
+        _ => return None,
+    };
+    if !matches!(agent.as_str(), "codex" | "claude") {
+        return None;
+    }
+    let store = hub.store();
+    let directory = &store.book.directory;
+    if directory.rights(&standing.account, &standing.to).hands {
+        return Some((agent, None));
+    }
+    directory
+        .assisting(&standing.account, &standing.to)
+        .find(|entry| entry.agent == agent)
+        .map(|entry| (agent.clone(), entry.home.clone()))
 }
 
 /// Checks that a call starting a session may use that agent's login on the
@@ -1075,8 +1125,15 @@ fn login_asked(message: &Envelope) -> Option<(AgentName, Option<std::path::PathB
 /// account's word for that (`world-network.md`, 一台机器什么时候能代一个
 /// 账号访问别的机器). Being shared a machine or assisted by a login does not
 /// do it.
-fn use_agent(hub: &Hub, message: &Envelope, standing: &Standing) -> Result<(), String> {
-    let Some((agent, home)) = login_asked(message) else { return Ok(()) };
+fn use_agent(
+    hub: &Hub,
+    message: &Envelope,
+    standing: &Standing,
+    details: &fastctx_net::call_details::CallDetails,
+) -> Result<(), String> {
+    let Some((agent, home)) = details.login.clone().or_else(|| upload_login(hub, message, standing)) else {
+        return Ok(());
+    };
     let (account, to) = (&standing.account, &standing.to);
     let noted = {
         let mut store = hub.store();
@@ -1143,18 +1200,29 @@ fn call(hub: &Hub, name: &MachineName, generation: u64, id: u64, message: Envelo
         Ok(standing) => standing,
         Err(reason) => return CallStatus::Refused { reason },
     };
-    if let Err(reason) = use_agent(hub, &message, &standing) {
+    let target = hub.sessions().get(&to).map(|session| (session.generation, session.out.clone(), session.call_details));
+    let Some((target_generation, target, target_verifies)) = target else {
+        return CallStatus::Offline { last_seen };
+    };
+    let details = match call_details(&message, target_verifies) {
+        Ok(details) => details,
+        Err(reason) => return CallStatus::Refused { reason },
+    };
+    if let Err(reason) = use_agent(hub, &message, &standing, &details) {
         return CallStatus::Refused { reason };
     }
-    if let Some(resident) = worked_for(&message).map(|resident| canonical_address(hub, resident))
+    if let Some(resident) = details.resident.map(|resident| canonical_address(hub, resident))
         && let Err(error) = hub.store().note_worked(&to, resident)
     {
         hub.log.line(format_args!("noting that {to} works for a resident: {error}"));
     }
-    let target = hub.sessions().get(&to).map(|session| (session.generation, session.out.clone()));
-    let Some((target_generation, target)) = target else {
-        return CallStatus::Offline { last_seen };
-    };
+    if standing.project_entry.is_some() && hub.sessions().get(&to).is_some_and(|session| !session.project_entry) {
+        return CallStatus::Refused {
+            reason: format!(
+                "{to} runs an older Fastctx that cannot enter projects from another machine; update it first"
+            ),
+        };
+    }
     let key = hub.next();
     if let Some(ticket) = &message.stream {
         crate::data::register(hub, ticket, &standing, name, generation);

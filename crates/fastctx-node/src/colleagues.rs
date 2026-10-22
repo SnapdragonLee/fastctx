@@ -109,7 +109,7 @@ async fn ask_for_account(
 ) -> Result<Address, Failure> {
     let machine = started.callee.login.machine.clone();
     let view = link.view();
-    let call_town = node.town_across(link, request.town);
+    let call_town = node.town_across(link, request.town)?;
     if let Some(town) = &call_town {
         let allowed = view
             .projects
@@ -172,7 +172,7 @@ pub async fn ask_here(
         .set_departed(&node.world, &asker, false, None)
         .map_err(|error| Failure::not_run(format!("recording that {asker} returned: {error}")))?;
     if let Some(town) = &town {
-        crate::town::project::spans_here(node, town).await?;
+        crate::town::access::ready(node, &acting, town).await?;
     }
     // The Codex home it is born in must be one this machine has, so the
     // account the user chose is the one that answers.
@@ -244,8 +244,12 @@ pub async fn ask_here(
         last_tool_at: None,
         first_words: None,
         last_said: None,
+        last_compacted: false,
         asked: None,
     };
+    if let Some(town) = &town {
+        crate::town::access::check(node, &about.acting, town)?;
+    }
     node.residents
         .create(&node.world, about.clone(), town.clone(), now)
         .map_err(|error| Failure::new(format!("recording the colleague: {error}")))?;
@@ -355,19 +359,13 @@ pub async fn thread_spec(
     }
     let user_mcp = crate::profile::session::codex(node, id, acting, &mut config)?;
     crate::session_options::configure(&mut config, crate::session_options::read(node, id)?);
-    let user_mcp = if assisting {
-        let world = config["mcp_servers"][codex::SERVER_NAME].clone();
-        config["mcp_servers"] = serde_json::json!({ codex::SERVER_NAME: world });
+    if assisting {
         codex::assisted::configure_thread(&mut config);
-        Default::default()
-    } else {
-        user_mcp
-    };
+    }
     let (mut developer_instructions, heard) = instructions(node, id, town, origin, acting, true).await?;
     // The machines and folders the user pointed it at, in the words its
     // thread started with, each time it is resumed (`crate::focus`).
-    if let Some(opening) =
-        crate::focus::opening(&node.world.conversation(id))?.filter(|opening| !opening.note.is_empty())
+    if let Some(opening) = crate::focus::opening_for(node, id, acting).await?.filter(|opening| !opening.note.is_empty())
     {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(&opening.note);
@@ -465,7 +463,8 @@ fn words(id: &ResidentId, town: Option<&TownName>, origin: &Origin, record: bool
     };
     // Where scripts run is said by the machines `run`'s description lists,
     // never by where the session lives (`world-run.md`, 脚本在哪台机器上跑).
-    let runs = "It runs a bash script on one of the machines its description lists, the script written as one `on MACHINE`";
+    let runs =
+        "It runs a bash script on one of the machines its description lists, the script written as one `on MACHINE`";
     format!(
         "You are {id}, an agent session.{place}\n\n{working}\n\nWork through the `run` tool; it is your only shell, editor and image viewer. {runs}; `fastctx view` shows files, images and documents, and `edit` and `write` change files. Its description says how. Paths are absolute, each the path on its own machine, written like C:/Users/me on Windows. A script still running when its call stops waiting (15 seconds by default) goes on by itself in the background; when it ends you are told automatically, with its exit status and last lines, while you work or after you end your turn."
     )

@@ -90,11 +90,13 @@ fn elsewhere(node: &Node) -> Vec<MachineWho> {
         // here: the same machine on two hubs has what both tell.
         let mut afoot: Option<Elsewhere> = None;
         for link in &links {
-            let Some(there) = link.view().machines().find(|machine| machine.key == reachable.key).map(|m| m.name.clone())
+            let Some(there) =
+                link.view().machines().find(|machine| machine.key == reachable.key).map(|m| m.name.clone())
             else {
                 continue;
             };
-            let Some(told) = told.entry(link.membership().id.clone()).or_insert_with(|| link.afoot()).get(&there) else {
+            let Some(told) = told.entry(link.membership().id.clone()).or_insert_with(|| link.afoot()).get(&there)
+            else {
                 continue;
             };
             let merged = afoot.get_or_insert_with(Elsewhere::default);
@@ -155,9 +157,11 @@ fn nodes(node: &Arc<Node>) -> NodesReply {
         let logins: Vec<fastctx_types::AccountName> =
             view.me().map(|me| me.logins.iter().cloned().collect()).unwrap_or_default();
         let mut machines = Vec::new();
-        for machine in view.machines().filter(|machine| !view.is_me(&machine.name)) {
-            let rights: Vec<_> =
-                logins.iter().map(|account| (account.clone(), view.rights(account, &machine.name))).collect();
+        for machine in view.machines().filter(|machine| current && !view.is_me(&machine.name)) {
+            let rights: Vec<_> = logins
+                .iter()
+                .map(|account| (account.clone(), view.call_rights(&view.me, account, &machine.name)))
+                .collect();
             let Some(account) = rights.iter().find(|(_, rights)| rights.hands).map(|(account, _)| account.clone())
             else {
                 continue;
@@ -177,10 +181,15 @@ fn nodes(node: &Arc<Node>) -> NodesReply {
                 rights,
             });
         }
+        // This computer is decided as any machine is: a locked account
+        // logged in here may not work on it either. The user at this
+        // computer's own screen is another matter, and is not this.
+        let here = logins.iter().map(|account| (account.clone(), view.call_rights(&view.me, account, &view.me))).collect();
         hubs.push(fastctx_types::world::HubNodes {
             hub: link.membership().id.clone(),
             name: view.hub_name.clone(),
             link: link.state(),
+            here,
             logins,
             home: view.me().and_then(|me| me.home.clone()),
             machines,

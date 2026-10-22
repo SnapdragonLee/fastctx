@@ -57,6 +57,11 @@ pub(super) async fn answer(inner: Arc<Inner>, replier: Replier, message: Envelop
         reply(&inner, &replier, &message, Kind::Refused, None, serde_json::Value::String(reason)).await;
         return;
     }
+    if matches!(replier, Replier::Peer(..)) && crate::message::project_entry(&message).is_some() {
+        let reason = "a project's entry from another machine must be authorized by its hub";
+        reply(&inner, &replier, &message, Kind::Refused, None, serde_json::Value::String(reason.into())).await;
+        return;
+    }
     // Its time here runs from now, not from when its work begins: what it
     // takes to admit it and bring its bytes in is waited for in it.
     let came = tokio::time::Instant::now();
@@ -222,6 +227,9 @@ async fn work(
         Ok(opened) => opened,
         Err(reason) => return Some(refused(reason)),
     };
+    if matches!(remote, RemoteCall::EnterProject { .. }) && crate::message::project_entry(message).is_none() {
+        return Some(refused("a project entry must be a complete, unstreamed control request".into()));
+    }
     let contract = remote.contract();
     if contract.pool != pool {
         place = match inner.node.place(&caller.machine, &caller.account, contract.pool) {
@@ -338,20 +346,24 @@ async fn open_call(
                 .map_err(|error| format!("opening its data connection: {error}"))?;
             Ok((remote, Some(stream), None))
         }
-        Body::LargeCall { carried } => {
+        Body::LargeCall { carried, details } => {
+            let details =
+                details.ok_or("upgrade the sender: its large call carries no verifiable authorization facts")?;
             if from_the_caller()? != carried.stream {
                 return Err("it names one data connection and carries another".to_string());
             }
             let bytes = crate::data::sink_until(endpoint, &inner.key, &carried, opening_deadline)
                 .await
                 .map_err(|error| format!("fetching it, too large for a message: {error}"))?;
-            Ok((
-                serde_json::from_slice(&bytes).map_err(|error| {
-                    format!("it cannot be read: {error}; a newer Fastctx may make calls this one does not know")
-                })?,
-                None,
-                Some(bytes.into_reservation()),
-            ))
+            let remote: RemoteCall = serde_json::from_slice(&bytes).map_err(|error| {
+                format!("it cannot be read: {error}; a newer Fastctx may make calls this one does not know")
+            })?;
+            if details != crate::call_details::CallDetails::of(&call.from, &remote)
+                || call.purpose != Some(details.purpose)
+            {
+                return Err("the large call differs from its authorized control-frame facts".into());
+            }
+            Ok((remote, None, Some(bytes.into_reservation())))
         }
         Body::Answer { .. } | Body::LargeAnswer { .. } => Err("it is not a call".to_string()),
     }

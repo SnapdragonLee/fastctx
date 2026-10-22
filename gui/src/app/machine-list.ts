@@ -159,7 +159,8 @@ export function machineList(now: ListNow, words: MachinesWords): string {
     sections.push(section(label, words.groupSub(all.length, online(all)), "", body));
   }
   if (assisting.length && !updates) sections.push(section(words.assistSection, words.groupSub(assisting.length, online(assisting)), "", draw.leaves(assisting, 0)));
-  if (updates) return `${updates.head}${sections.join("")}`;
+  // The ruler and the policy stay put; the machines under them scroll.
+  if (updates) return `<div class="uv-top">${updates.head}</div><div class="uv-rows scroller">${sections.join("")}</div>`;
   return `<div class="ml-hubs">${hubRows.join("")}</div>${sections.join("")}`;
 }
 
@@ -171,7 +172,8 @@ function updateOf(node: MapNode, machines: Map<string, Machine>, updates: Update
 
 /** A mark as a row's cell: what it says, said when pointed at. */
 function markCell(mark: Mark): string {
-  return `<span class="ml-link uv-mark ${mark.kind}"${mark.said ? ` title="${escape(mark.said)}"` : ""}>${mark.html}</span>`;
+  const title = [mark.said, mark.why].filter(Boolean).join("\n");
+  return `<span class="ml-link uv-mark ${mark.kind}"${title ? ` title="${escape(title)}"` : ""}>${mark.html}</span>`;
 }
 
 /** A section: its name, how many and how many online, a hand-drawn line;

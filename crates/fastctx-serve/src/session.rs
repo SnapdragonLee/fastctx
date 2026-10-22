@@ -25,6 +25,10 @@ pub struct Session {
     host: OnceLock<Host>,
     /// Set when the World started this session as a Codex thread.
     resident: Option<String>,
+    /// The conversation a Claude Code session the World started is, named
+    /// by the settings it was started with: known before any call arrives,
+    /// so the tools it lists first are already that conversation's.
+    conversation: Option<ResidentId>,
     /// The residents this session's calls belong to, by Codex thread; calls
     /// with no thread share the entry for `None`.
     residents: tokio::sync::Mutex<HashMap<Option<String>, Arrival>>,
@@ -52,7 +56,15 @@ impl Session {
     pub fn new(world: WorldDir, writes_off: bool) -> anyhow::Result<Self> {
         // Set, as `<id>@<machine>`, when the World started this session.
         let resident = match std::env::var("FASTCTX_RESIDENT") {
-            Ok(address) => Some(address),
+            Ok(address) => {
+                address.parse::<Address>().map_err(anyhow::Error::msg)?;
+                Some(address)
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => return Err(error.into()),
+        };
+        let conversation = match std::env::var("FASTCTX_CONVERSATION") {
+            Ok(id) => Some(ResidentId::try_from(id).map_err(anyhow::Error::msg)?),
             Err(std::env::VarError::NotPresent) => None,
             Err(error) => return Err(error.into()),
         };
@@ -60,6 +72,7 @@ impl Session {
             world,
             host: OnceLock::new(),
             resident,
+            conversation,
             residents: tokio::sync::Mutex::new(HashMap::new()),
             were: Mutex::new(HashMap::new()),
             starting: tokio::sync::Mutex::new(()),
@@ -94,6 +107,7 @@ impl Session {
     pub fn for_call(self: &Arc<Self>, meta: Option<&Value>) -> Arc<Self> {
         let modern = meta.is_some_and(|meta| meta.get(VERSION_KEY).is_some());
         let identified = self.resident.is_some()
+            || self.conversation.is_some()
             || meta.is_some_and(|meta| {
                 ["threadId", "claudecode/toolUseId"]
                     .iter()
@@ -106,6 +120,7 @@ impl Session {
             world: self.world.clone(),
             host: OnceLock::new(),
             resident: self.resident.clone(),
+            conversation: self.conversation.clone(),
             residents: tokio::sync::Mutex::new(HashMap::new()),
             were: Mutex::new(HashMap::new()),
             starting: tokio::sync::Mutex::new(()),
@@ -518,7 +533,11 @@ impl Session {
         if host.agent.as_str() == "claude" || tool_use_id.is_some() {
             let tool_use_id = tool_use_id.and_then(Value::as_str).filter(|id| !id.is_empty())
                 .ok_or("Claude did not supply a nonempty _meta[\"claudecode/toolUseId\"]; this call cannot be paired with its mod session")?;
-            let hints = Hints { tool_use_id: Some(tool_use_id.to_string()), ..Hints::default() };
+            let hints = Hints {
+                resident: self.known_resident(meta),
+                tool_use_id: Some(tool_use_id.to_string()),
+                ..Hints::default()
+            };
             let mut client = self.client(meta).await?;
             return match client.call(Call::Arrive { host, hints }).await {
                 Ok(Reply::Arrived(whereabouts)) => {
@@ -562,7 +581,8 @@ impl Session {
             .map(str::parse::<Address>)
             .transpose()
             .map_err(|error| error.to_string())?
-            .map(|address| address.resident);
+            .map(|address| address.resident)
+            .or_else(|| self.conversation.clone());
         let hints = Hints { resident, thread: thread.clone(), was, tool_use_id: None };
         let mut client = self.client_for(host.clone()).await?;
         match client.call(Call::Arrive { host, hints }).await {
@@ -622,9 +642,11 @@ impl Session {
         if let Some(address) = self.resident.as_deref().and_then(|address| address.parse::<Address>().ok()) {
             return Some(address.resident);
         }
+        if let Some(conversation) = &self.conversation {
+            return Some(conversation.clone());
+        }
         let thread = meta.and_then(|meta| meta.get("threadId")).and_then(Value::as_str).map(str::to_string);
-        let were = self.were.lock().expect("never poisoned");
-        were.get(&thread).or_else(|| were.get(&None)).cloned()
+        self.were.lock().expect("never poisoned").get(&thread).cloned()
     }
 
     /// Tells the host each time the tools this session lists may have

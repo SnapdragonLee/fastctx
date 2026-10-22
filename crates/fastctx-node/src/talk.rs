@@ -61,11 +61,7 @@ pub async fn talk(
         return Ok((Address { machine: here, resident: to }, landed));
     }
     let call = RemoteCall::Talk { to: to.clone(), text, attachments, files_on, id };
-    match node
-        .call(&Acting::Here, &machine, Purpose::Agents, call)
-        .await
-        .map_err(|failure| Failure::unanswered(failure.to_string()))?
-    {
+    match node.call(&Acting::Here, &machine, Purpose::Agents, call).await.map_err(crate::authorization::call_failure)? {
         Ok(RemoteReply::Said { landed }) => Ok((Address { machine: machine.name, resident: to }, landed)),
         Ok(_) => Err(Failure::new(format!("{machine} answered something other than a talk"))),
         Err(failure) => Err(failure),
@@ -842,9 +838,9 @@ pub async fn open_here(
         }
     }
     if let Some(town) = &town {
-        crate::town::project::spans_here(node, town).await?;
+        crate::town::access::ready(node, &opened.acting, town).await?;
     }
-    let (id, _opening) = crate::attachments::opening(node, &agent, town.as_ref(), &attachments).await?;
+    let (id, _opening) = crate::attachments::opening(node, &agent, &opened.acting, town.as_ref(), &attachments).await?;
     let _birth = crate::here::born(node, &id, opened.acting.clone());
     let origin = Origin::User;
     crate::session_options::keep(node, &id, &options)?;
@@ -894,8 +890,12 @@ pub async fn open_here(
         last_tool_at: None,
         first_words: None,
         last_said: None,
+        last_compacted: false,
         asked: None,
     };
+    if let Some(town) = &town {
+        crate::town::access::check(node, &about.acting, town)?;
+    }
     node.residents
         .create(&node.world, about, town, now)
         .map_err(|error| Failure::new(format!("recording the session: {error}")))?;

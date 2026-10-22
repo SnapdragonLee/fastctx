@@ -7,13 +7,14 @@
 //! (`application`). Everything kept is under `<root>/updates`.
 
 mod application;
+mod doctor;
 mod packages;
 mod retry;
 mod schedule;
 
 pub(crate) use application::Open;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -148,6 +149,7 @@ pub(crate) fn start(node: &Arc<Node>) {
     if !fastctx_platform::follows_releases() {
         return;
     }
+    doctor::start(node);
     let node = node.clone();
     tokio::spawn(async move {
         let settled = tokio::time::Instant::now() + Duration::from_secs(90);
@@ -234,12 +236,17 @@ pub(crate) fn state(node: &Node) -> State {
             fetching: held.fetching.clone(),
             failed: held.attempt.failed.clone().or_else(|| {
                 let plan = fastctx_install::renewal::read(&node.root).ok().flatten()?;
-                Some(Failed {
-                    version: plan.error_version.unwrap_or(plan.candidate.build.version),
-                    target: fastctx_update::kernel::target(),
-                    why: plan.error?,
-                    reason: None,
-                })
+                // A step waited on says why without having failed.
+                if plan.phase != fastctx_types::renewal::Phase::Failed {
+                    return None;
+                }
+                let version = plan.error_version.unwrap_or(plan.candidate.build.version);
+                // A program this node runs already, or one older, is no
+                // failure to tell now.
+                if !fastctx_types::kernel::later(&version, env!("CARGO_PKG_VERSION")) {
+                    return None;
+                }
+                Some(Failed { version, target: fastctx_update::kernel::target(), why: plan.error?, reason: None })
             }),
             retry_at: held.attempt.failed.as_ref().and(held.attempt.delay.next),
             kept: cache.kept(),
@@ -359,8 +366,23 @@ pub(crate) async fn call(node: &Arc<Node>, call: UpdateCall) -> Result<State, St
     }
     match call {
         UpdateCall::Progress { stage } => {
+            // An installation the interface could not make is kept as any
+            // failed update is, and not tried again before its time, the
+            // interface opened again or not.
+            if let Stage::Failed { version, problem } = &stage {
+                let target = node.updates.held.lock().expect("never poisoned").app.as_ref().map(|app| app.target.clone());
+                if let Some(target) = target {
+                    let failure = Failed {
+                        version: version.clone(),
+                        target,
+                        why: problem.why.clone(),
+                        reason: Some(problem.reason.clone()),
+                    };
+                    retry::failed(node, failure);
+                }
+            }
             node.updates.held.lock().expect("never poisoned").activity =
-                (!matches!(stage, Stage::Idle)).then_some(stage);
+                (!matches!(stage, Stage::Idle | Stage::Failed { .. })).then_some(stage);
             report(node);
         }
         UpdateCall::Preferences { auto, relays } => {
@@ -565,7 +587,17 @@ fn reject_update(
 /// for the interface's; `asker` is who asked from elsewhere.
 async fn kernel(node: &Arc<Node>, version: Option<&str>, asker: Option<Asker>) -> Result<(), String> {
     let offer = match version {
-        Some(version) => manifest_of(node, version).await?,
+        // A release asked for whose manifest did not come is kept as a
+        // failure of that release, to be tried again as any other.
+        Some(version) => match manifest_of(node, version).await {
+            Ok(offer) => offer,
+            Err(why) => {
+                let target = fastctx_update::kernel::target();
+                retry::failed(node, Failed { version: version.to_string(), target, why: why.clone(), reason: None });
+                report(node);
+                return Err(why);
+            }
+        },
         None => {
             state(node).offer.ok_or("no release is known here yet; look again once GitHub or the network answers")?
         }
@@ -655,22 +687,57 @@ async fn take(
     }
     let root = node.root.clone();
     let unpacking = dir(node).join("unpacked");
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        // The program's own signature comes out beside it, as an interface's
-        // carried one has it: the Windows guardian takes a program in by it,
-        // with no administrator (`world-upgrade.md`). The package's signature
-        // is over the archive and never goes beside the program.
-        let plan = fastctx_install::renewal::stage_package(&root, &archive, &unpacking)
-            .map_err(|error| format!("{error:#}"))?;
-        if plan.phase != fastctx_types::renewal::Phase::Complete {
-            fastctx_install::renewal::request(&root, true).map_err(|error| error.to_string())?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|error| error.to_string())??;
+    tokio::task::spawn_blocking(move || stage_with_its_own_program(&root, &archive, &unpacking))
+        .await
+        .map_err(|error| error.to_string())??;
     node.log.line(format_args!("staged fastctx {} to take over once the turns under way end", offer.version));
     Ok(())
+}
+
+/// How long the release brought is given to stage itself.
+const STAGING: Duration = Duration::from_secs(10 * 60);
+
+/// Stages the release in `archive` with that release's own program, which
+/// decides whether it is taken and takes over a handover left stuck: so a
+/// fault in this release's staging never keeps a later release out, as one
+/// in 1.0.1-beta.4's kept its machines on it (`world-upgrade.md`, 没成的，自己
+/// 再试). The program's own signature comes out beside it, as an interface's
+/// carried one has it; the package's signature is over the archive and never
+/// goes beside the program. Where the program does not start here at all,
+/// this release stages it, and says why it cannot be taken.
+fn stage_with_its_own_program(root: &Path, archive: &Path, unpacking: &Path) -> Result<(), String> {
+    let _ = std::fs::remove_dir_all(unpacking);
+    std::fs::create_dir_all(unpacking).map_err(|error| format!("{}: {error}", unpacking.display()))?;
+    let staged = (|| {
+        let program = fastctx_update::kernel::unpack(archive, unpacking)?;
+        let mut command = std::process::Command::new(&program);
+        command.args(["renew", "stage", "--dir"]).arg(root).arg("--package").arg(archive);
+        command.stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(0x0800_0000);
+        }
+        match fastctx_platform::bounded::output(command, "the new release staging itself", STAGING) {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let said = String::from_utf8_lossy(&output.stderr);
+                let said = said.trim();
+                Err(if said.is_empty() { format!("the new release did not stage: {}", output.status) } else { said.to_string() })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(error.to_string()),
+            Err(_) => {
+                let plan = fastctx_install::renewal::stage_package(root, archive, &unpacking.join("here"))
+                    .map_err(|error| format!("{error:#}"))?;
+                if plan.phase != fastctx_types::renewal::Phase::Complete {
+                    fastctx_install::renewal::request(root, true).map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            }
+        }
+    })();
+    let _ = std::fs::remove_dir_all(unpacking);
+    staged
 }
 
 /// Asks `machine`, this machine or another, about its updates. A machine
@@ -815,10 +882,7 @@ fn auto(node: &Arc<Node>) {
     }
     schedule::reconcile(node);
     let state = state(node);
-    if state.fetching.is_some()
-        || state.renewing.as_ref().is_some_and(|renewing| renewing.phase != fastctx_types::renewal::Phase::Failed)
-        || application::busy()
-        || (state.take.is_some() && (application::open() || !cfg!(windows)))
+    if state.fetching.is_some() || application::busy() || (state.take.is_some() && (application::open() || !cfg!(windows)))
     {
         return;
     }
@@ -841,16 +905,41 @@ fn auto(node: &Arc<Node>) {
             let asked = read_json::<AskedFile>(&dir(node).join("asked.json")).ok().flatten()?;
             Some((version, Asker { by: asked.by, hub: asked.hub, scheduled_at: None }))
         });
+    // Updating by itself decides whether a new release is begun, not whether
+    // one begun and failed is finished: that one is tried again on its
+    // schedule however it was begun (`world-upgrade.md`, 没成的，自己再试).
+    let unfinished = || {
+        let held = node.updates.held.lock().expect("never poisoned");
+        let failed = held.attempt.failed.as_ref()?;
+        let refused = matches!(
+            failed.reason,
+            Some(fastctx_types::update::FailureReason::NoPackage | fastctx_types::update::FailureReason::NotNewer)
+        );
+        (!refused && failed.target == state.kernel_target && fastctx_types::update::release(&failed.version) > running)
+            .then(|| failed.version.clone())
+    };
     let (version, asker) = match due {
         Some((version, asker)) => (version, Some(asker)),
-        None if state.auto && state.app.is_none() => match within(&state) {
+        None if state.app.is_none() => match within(&state).filter(|_| state.auto).or_else(unfinished) {
             Some(version) => (version, None),
             None => return,
         },
         None => return,
     };
-    if state.renewing.as_ref().is_some_and(|renewing| renewing.version == version) {
-        // A staged failed handover has its own durable recovery schedule.
+    // A change to this release or a later one goes on by itself, a failed
+    // one on its own durable recovery schedule; one to an earlier release,
+    // under way or stuck, gives way to this one.
+    if state.renewing.as_ref().is_some_and(|renewing| {
+        fastctx_types::update::release(&renewing.version) >= fastctx_types::update::release(&version)
+    }) {
+        return;
+    }
+    // Where GitHub cannot be reached the network is the only source of a
+    // package not here yet: the update waits for a hub to be connected,
+    // rather than failing while the line is down and waiting an hour (a
+    // room's line comes and goes). One already here goes on.
+    let linked = node.links().iter().any(|link| matches!(link.status(), fastctx_net::link::Status::Online { .. }));
+    if !linked && state.looked.github != Some(true) && cache(node).get(&version, &state.kernel_target).is_none() {
         return;
     }
     let Some(attempt) = retry::begin(node, &version) else { return };

@@ -373,6 +373,9 @@ fn nodes(now: Timestamp) -> NodesReply {
         case_sensitive: false,
         version: "1.0.0".into(),
         mcp: false,
+        mcp_import: false,
+        page_accounts: false,
+        attachment_places: false,
         completion_receipts: false,
         upload_resumes: false,
         attachment_references: false,
@@ -409,6 +412,7 @@ fn nodes(now: Timestamp) -> NodesReply {
             },
             logins: vec!["me".parse().expect("an account")],
             home: Some("me".parse().expect("an account")),
+            here: vec![("me".parse().expect("an account"), fastctx_types::access::Rights { hands: true, agents: true })],
             machines: vec![
                 node("desktop", true, 300, Ok(facts("desktop", "windows", "C:/Users/me"))),
                 node("laptop", true, 180, Ok(facts("laptop", "windows", "C:/Users/me"))),

@@ -23,6 +23,18 @@ use crate::{AgentName, ResidentId, TownName};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "call")]
 pub enum RemoteCall {
+    /// A running job returns its resident's project selection to its home.
+    /// This call is relayed and authorized by a hub supporting project entry.
+    EnterProject {
+        resident: ResidentId,
+        town: TownName,
+    },
+    /// Where a file attached for `target` may be kept, the machine asked
+    /// being where the conversation lives.
+    AttachmentPlaces {
+        target: crate::attachments::UploadTarget,
+        preferred: Option<crate::access::Written>,
+    },
     Mcp {
         mcp: crate::mcp::MachineCall,
     },
@@ -482,6 +494,13 @@ impl RemoteCall {
     /// check it.
     pub fn purpose(&self) -> Purpose {
         match self {
+            Self::EnterProject { .. } => Purpose::Echo,
+            RemoteCall::PageAction { action: crate::pages::PageInvocation::Say { .. }, .. } => Purpose::Words,
+            RemoteCall::ReadAttachment { attachment: crate::attachments::AttachmentSource::Upload(file), .. }
+                if file.owner != *file.conversation() =>
+            {
+                Purpose::Hands
+            }
             RemoteCall::Mcp { .. }
             | RemoteCall::McpServe { .. }
             | RemoteCall::Run { .. }
@@ -520,7 +539,8 @@ impl RemoteCall {
             | RemoteCall::UpdateWorld
             | RemoteCall::Updates { .. }
             | RemoteCall::Stats { .. } => Purpose::Hands,
-            RemoteCall::ReserveAttachment { .. }
+            RemoteCall::AttachmentPlaces { .. }
+            | RemoteCall::ReserveAttachment { .. }
             | RemoteCall::CommitAttachment { .. }
             | RemoteCall::Composer { .. }
             | RemoteCall::AttachmentThumbnail { .. }
@@ -556,6 +576,10 @@ impl RemoteCall {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "reply")]
 pub enum RemoteReply {
+    Entered {
+        town: TownName,
+        map: Box<crate::project::MapView>,
+    },
     Mcp {
         result: crate::mcp::MachineReply,
     },
@@ -575,6 +599,7 @@ pub enum RemoteReply {
         accepted: bool,
         changed: bool,
     },
+    AttachmentPlaces(crate::attachments::AttachmentPlaces),
     Uploaded(crate::attachments::Attachment),
     Run(Box<RunReply>),
     /// An `on` job's end was handed over, or it was stopped.

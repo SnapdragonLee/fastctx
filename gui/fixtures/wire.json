@@ -10623,7 +10623,8 @@
                     "waiting_for_user": false,
                     "waiting_since": "2026-10-04T12:06:07Z",
                     "title": null,
-                    "last_tool_at": "2026-10-04T12:06:07Z"
+                    "last_tool_at": "2026-10-04T12:06:07Z",
+                    "last_compacted": true
                   },
                   "last_action": null,
                   "tools": [
@@ -12156,7 +12157,8 @@
                     "waiting_for_user": false,
                     "waiting_since": "2026-10-04T12:06:07Z",
                     "title": null,
-                    "last_tool_at": "2026-10-04T12:06:07Z"
+                    "last_tool_at": "2026-10-04T12:06:07Z",
+                    "last_compacted": true
                   },
                   "last_action": null,
                   "tools": [
@@ -12688,7 +12690,8 @@
                     "waiting_for_user": false,
                     "waiting_since": "2026-10-04T12:06:07Z",
                     "title": null,
-                    "last_tool_at": "2026-10-04T12:06:07Z"
+                    "last_tool_at": "2026-10-04T12:06:07Z",
+                    "last_compacted": true
                   },
                   "last_action": null,
                   "tools": [
@@ -13007,6 +13010,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13043,6 +13049,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13064,6 +13079,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13119,6 +13137,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13150,6 +13171,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13188,6 +13212,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13209,6 +13242,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13264,6 +13300,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13295,6 +13334,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13333,6 +13375,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13354,6 +13405,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13409,6 +13463,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13440,6 +13497,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13477,6 +13537,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13498,6 +13567,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13553,6 +13625,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13584,6 +13659,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13622,6 +13700,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13643,6 +13730,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13698,6 +13788,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13729,6 +13822,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13770,6 +13866,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13791,6 +13896,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13846,6 +13954,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13877,6 +13988,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -13919,6 +14033,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -13940,6 +14063,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -13995,6 +14121,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14026,6 +14155,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -14068,6 +14200,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -14089,6 +14230,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14144,6 +14288,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14175,6 +14322,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -14216,6 +14366,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -14237,6 +14396,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14292,6 +14454,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14323,6 +14488,9 @@
           "version": "fixture-version",
           "stats": true,
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": "",
           "node_lifetime": {
             "process": {
@@ -14366,6 +14534,15 @@
               "ada"
             ],
             "home": "ada",
+            "here": [
+              [
+                "ada",
+                {
+                  "hands": true,
+                  "agents": true
+                }
+              ]
+            ],
             "machines": [
               {
                 "name": "lab",
@@ -14387,6 +14564,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14442,6 +14622,9 @@
                     "case_sensitive": true,
                     "version": "fixture-version",
                     "mcp": true,
+                    "mcp_import": true,
+                    "page_accounts": true,
+                    "attachment_places": true,
                     "shell": ""
                   }
                 },
@@ -14472,6 +14655,9 @@
           "case_sensitive": false,
           "version": "fixture-version",
           "mcp": true,
+          "mcp_import": true,
+          "page_accounts": true,
+          "attachment_places": true,
           "shell": ""
         },
         "hubs": []
@@ -18956,6 +19142,7 @@
       },
       {
         "control_queue": true,
+        "controls_told": true,
         "pending_controls": [
           {
             "id": "control-1",

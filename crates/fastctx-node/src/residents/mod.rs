@@ -184,6 +184,9 @@ struct Live {
     /// that started with none of the World's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instructed: Option<Heard>,
+    /// When its host last told of its context compacted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compacted_at: Option<Timestamp>,
 }
 
 impl Live {
@@ -204,6 +207,7 @@ impl Live {
             owed,
             heard: None,
             instructed: None,
+            compacted_at: None,
         }
     }
 
@@ -404,6 +408,18 @@ impl Residents {
         }
     }
 
+    /// Its host told of its context compacted, at `at`.
+    pub fn compacted_at(&self, id: &ResidentId, at: Timestamp) {
+        if let Some(live) = self.lock().live.get_mut(id) {
+            live.compacted_at = Some(at);
+        }
+    }
+
+    /// When its host last told of its context compacted.
+    pub fn last_compaction(&self, id: &ResidentId) -> Option<Timestamp> {
+        self.lock().live.get(id).and_then(|live| live.compacted_at)
+    }
+
     /// A tool reply was written. Concurrent replies must not move the
     /// cursor backwards or acknowledge news from a town the resident left.
     pub fn acknowledge_heard(&self, id: &ResidentId, heard: Heard) {
@@ -424,7 +440,7 @@ impl Residents {
         self.changed.subscribe()
     }
 
-    /// The resident a session is, made now if it is new.
+    /// Reconnects a known session or admits one the local user opened without a World identity.
     pub fn arrive(
         &self,
         world: &WorldDir,
@@ -457,9 +473,13 @@ impl Residents {
             live.connections += 1;
             return Ok(Whereabouts { resident, town: live.town() });
         }
-        if let Some(resident) = hints.was
-            && let Some(live) = state.live.get_mut(&resident)
-        {
+        if let Some(resident) = hints.was {
+            let live = state.live.get_mut(&resident).ok_or_else(|| {
+                fastctx_types::authorization::Denial::new(
+                    fastctx_types::authorization::DenialReason::NoSubject,
+                    "the session's previous resident is not registered",
+                )
+            })?;
             if live.removed.is_some() {
                 return Err(removal::refused(&resident));
             }
@@ -478,7 +498,7 @@ impl Residents {
             session: hints.thread.clone(),
             world_started: false,
             model: None,
-            acting: Default::default(),
+            acting: fastctx_types::access::Acting::Here,
             focus: Default::default(),
             home: None,
             callee: None,
@@ -780,6 +800,7 @@ impl Residents {
         self.with_live(world, id, |_live, now| {
             enter(now, turn);
             now.since = at;
+            now.last_compacted = false;
         })
     }
 
@@ -1009,6 +1030,7 @@ pub fn idle(since: Timestamp) -> Now {
         last_tool_at: None,
         first_words: None,
         last_said: None,
+        last_compacted: false,
         asked: None,
     }
 }

@@ -1102,6 +1102,15 @@ pub async fn deliver(
     } else {
         false
     };
+    let current = match node.residents.about(to) {
+        Some((about, _)) => about,
+        None => return Some(Err(crate::authorization::no_subject())),
+    };
+    if let Err(failure) =
+        crate::homes::available(node, &current).and_then(|()| crate::assists::may_turn(node, to, &current))
+    {
+        return Some(Ok(Landed::Waiting { why: Some(failure.message), answered: true }));
+    }
     let user_action =
         matches!(pending.delivery.notice, Notice::Words { from: Speaker::User { .. }, .. } | Notice::Attached { .. });
     if !about.world_started && !stopped_background && !user_action {
@@ -1317,6 +1326,37 @@ async fn wake(
     Ok(Landed::Handed { id })
 }
 
+/// Sends the words `id` that woke `resident` again, as they were first
+/// sent, once the session they woke ended before taking them (`startup`).
+async fn wake_again(
+    node: &Arc<Node>,
+    resident: &ResidentId,
+    session: &str,
+    id: &fastctx_types::NoticeId,
+    command: &Command,
+) -> Result<(), Failure> {
+    node.residents.active(resident)?;
+    crate::focus::refresh(node, resident).await?;
+    let (about, _) = node.residents.about(resident).ok_or_else(crate::authorization::no_subject)?;
+    crate::homes::listed(node, about.host.agent.as_str(), about.home.as_deref())?;
+    crate::assists::may_turn(node, resident, &about)?;
+    let directory = node.world.conversation(resident);
+    let pending = crate::inbox::read(&directory, id)
+        .map_err(|error| Failure::new(format!("reading what wakes {resident}: {error}")))?
+        .ok_or_else(|| Failure::new(format!("the words that woke {resident} are no longer kept")))?;
+    let (text, as_user) = words(&pending.delivery.notice);
+    let args = background::wake_args(session, &if as_user { text } else { claude::framed(&text) });
+    crate::profile::session::claude(node, resident, false)?;
+    let Command { program, cwd, env } = command.clone();
+    tokio::task::spawn_blocking(fastctx_platform::doing::carried(move || {
+        trust(&[cwd.as_path()], &env).and_then(|()| background::claude(&program, &args, &cwd, &env))
+    }))
+    .await
+    .map_err(|error| Failure::new(format!("waking the session again: {error}")))?
+    .map_err(Failure::new)?;
+    Ok(())
+}
+
 /// Where a session is resumed from: the directory it was opened in, as its
 /// registration says, so its own tools go on working there; the World's
 /// directory where it was opened in the user's home, which Claude Code
@@ -1392,14 +1432,14 @@ pub async fn open_here(
     attachments: Vec<fastctx_types::attachments::Attachment>,
 ) -> Result<(ResidentId, Landed), Failure> {
     if let Some(town) = &town {
-        crate::town::project::spans_here(node, town).await?;
+        crate::town::access::ready(node, &opened.acting, town).await?;
     }
     // Nothing of the conversation is made for a Claude Code that cannot
     // run it.
     let launching = command(node, opened.home.as_deref())?;
     oldest::check(node, &launching).await?;
     let agent = AgentName::try_from("claude").expect("a valid agent name");
-    let (id, _opening) = crate::attachments::opening(node, &agent, town.as_ref(), &attachments).await?;
+    let (id, _opening) = crate::attachments::opening(node, &agent, &opened.acting, town.as_ref(), &attachments).await?;
     let _birth = crate::here::born(node, &id, opened.acting.clone());
     let Command { program, env, .. } = launching.clone();
     // A login assisting another account starts without the browser of this
@@ -1443,8 +1483,12 @@ pub async fn open_here(
         last_tool_at: None,
         first_words: None,
         last_said: None,
+        last_compacted: false,
         asked: None,
     };
+    if let Some(town) = &town {
+        crate::town::access::check(node, &about.acting, town)?;
+    }
     node.residents
         .create(&node.world, about, town.clone(), now)
         .map_err(|error| Failure::new(format!("recording the session: {error}")))?;

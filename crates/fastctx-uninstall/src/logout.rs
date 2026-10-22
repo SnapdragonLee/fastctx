@@ -83,6 +83,7 @@ async fn open_saying(
         versions: false,
         due: false,
         project_deletes: false,
+        project_entry: false,
         conversation_deletions: false,
         profiles: false,
         left: left.map(str::to_string),
@@ -91,6 +92,7 @@ async fn open_saying(
         cancels: false,
         presence: false,
         parts: false,
+        call_details: false,
     };
     dial::send(
         &mut connection.socket,

@@ -212,6 +212,71 @@ fn handed_over(root: &Path, entry: &Path) -> anyhow::Result<Option<FileLock>> {
     Ok(None)
 }
 
+/// Where the process coordinating the handover to the program `digest`
+/// says who it is (`fastctx_node::replacement::prepare`).
+pub fn coordinator(root: &Path, digest: &str) -> PathBuf {
+    directory(root).join(format!("coordinator-{digest}.json"))
+}
+
+/// A handover its boot service never took keeps its gate for good: the
+/// process coordinating it holds the gate for as long as the stable node it
+/// started serves, and that node serves on while the service refuses its
+/// program, as an earlier release's guardian refused one without its own
+/// signature; an earlier release also left its coordinator holding the gate
+/// after it counted its handover complete. A newer program offered, with no
+/// handover going on (the worker's gate is held by this staging), ends every
+/// coordinator still alive for another program, which by then only holds
+/// the gate, its node, detached from it, going on serving; and takes the
+/// gate, which nothing else ever would. The gate once they have let it go;
+/// none where no such handover holds it.
+fn superseded(root: &Path, entry: &Path, source: &Path) -> anyhow::Result<Option<FileLock>> {
+    let plan = read(root)?;
+    let stuck = plan.as_ref().is_none_or(|plan| {
+        matches!(plan.phase, Phase::Complete | Phase::AwaitingAdministrator | Phase::Failed)
+            || (plan.phase == Phase::UpdatingGuardian && plan.error.is_some())
+    });
+    if !stuck {
+        return Ok(None);
+    }
+    let offered = crate::program::inspect(source)?;
+    if let Some(plan) = &plan
+        && plan.candidate.build != offered
+        && !crate::program::newer(&offered, &plan.candidate.build)?
+    {
+        return Ok(None);
+    }
+    let mut holders = Vec::new();
+    for found in fs::read_dir(directory(root))? {
+        let name = found?.file_name();
+        let Some(digest) = name.to_str().and_then(|name| name.strip_prefix("coordinator-")?.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        if digest == offered.digest {
+            continue;
+        }
+        if let Some(holder) = read_json::<fastctx_types::ProcessIdentity>(&coordinator(root, digest))?
+            && fastctx_platform::is_alive(&holder)?
+        {
+            holders.push(holder);
+        }
+    }
+    if holders.is_empty() {
+        return Ok(None);
+    }
+    for holder in &holders {
+        fastctx_platform::terminate::terminate(holder)?;
+    }
+    let began = std::time::Instant::now();
+    while began.elapsed() < HANDOVER {
+        if let Some(lock) = FileLock::try_acquire(entry)? {
+            return Ok(Some(lock));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    Ok(None)
+}
+
 /// Takes the program out of a release's checked package, its own signature
 /// beside it (`fastctx_update::kernel::unpack`), and stages it, unpacking in
 /// `unpacking`, a directory of the caller's emptied first and after.
@@ -250,9 +315,14 @@ pub fn stage(root: &Path, source: &Path, _running: Option<&Path>) -> anyhow::Res
     let entry = directory(root).join("node-entry.lock");
     let _node_entry = match FileLock::try_acquire(&entry)? {
         Some(lock) => lock,
-        None => handed_over(root, &entry)?.ok_or_else(|| {
-            anyhow::anyhow!("the node is completing its program handover; it was asked to finish it, and its plan was left unchanged")
-        })?,
+        None => match handed_over(root, &entry)? {
+            Some(lock) => lock,
+            None => superseded(root, &entry, source)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the node is completing its program handover; it was asked to finish it, and its plan was left unchanged"
+                )
+            })?,
+        },
     };
     let _activation = FileLock::try_acquire(&directory(root).join("activation.lock"))?.ok_or_else(|| {
         anyhow::anyhow!("the World program is starting or being published; its plan was left unchanged")
@@ -318,16 +388,14 @@ pub fn stage(root: &Path, source: &Path, _running: Option<&Path>) -> anyhow::Res
     } else {
         None
     };
+    // A plan for another program starts with nothing failed: what went
+    // wrong replacing an earlier one is not this one's to say.
     let mut plan = Plan {
         candidate: Program { path: copied, build },
         previous,
         phase: Phase::Staged,
-        error: old_plan.as_ref().and_then(|plan| plan.error.clone()),
-        error_version: old_plan.as_ref().and_then(|plan| {
-            plan.error
-                .as_ref()
-                .map(|_| plan.error_version.clone().unwrap_or_else(|| plan.candidate.build.version.clone()))
-        }),
+        error: None,
+        error_version: None,
         retry: fastctx_update::retry::Retry::default(),
         keeper_restarted: false,
     };

@@ -14,7 +14,11 @@ pub enum Body {
     Call { call: RemoteCall },
     /// A call too large for a message: it follows over the envelope's data
     /// connection, as the JSON of a `RemoteCall`.
-    LargeCall { carried: Carried },
+    LargeCall {
+        carried: Carried,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<crate::call_details::CallDetails>,
+    },
     /// A call that comes with the envelope's data connection, whose source
     /// is the caller: the two ends exchange what the call is about, such as
     /// the files of a copy, while the call waits for its answer.
@@ -84,6 +88,24 @@ pub fn worked_for(from: &fastctx_types::MachineName, call: &RemoteCall) -> Optio
         RemoteCall::On { origin, .. } | RemoteCall::Follow { origin, .. } => Some(origin.resident.clone()),
         RemoteCall::Run { resident, .. } | RemoteCall::Place { resident, .. } => Some(address(resident)),
         RemoteCall::Ask { asker, .. } => Some(address(asker)),
+        _ => None,
+    }
+}
+
+/// A bounded project-entry request whose origin the hub can verify before
+/// forwarding it. Streamed calls cannot carry this control operation.
+pub fn project_entry(
+    message: &crate::envelope::Envelope,
+) -> Option<(fastctx_types::ResidentId, fastctx_types::TownName)> {
+    if message.kind != crate::envelope::Kind::Call
+        || message.stream.is_some()
+        || message.body.get("call").and_then(|call| call.get("call")).and_then(serde_json::Value::as_str)
+            != Some("enter_project")
+    {
+        return None;
+    }
+    match message.body::<Body>().ok()? {
+        Body::Call { call: RemoteCall::EnterProject { resident, town } } => Some((resident, town)),
         _ => None,
     }
 }

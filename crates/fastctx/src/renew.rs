@@ -163,6 +163,15 @@ async fn complete(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
     phase(root, plan, Phase::Complete)
 }
 
+/// The boot service's side has not taken the new program yet: the renewal
+/// waits in the service's step, saying why, and the node asks it again within
+/// half a minute (`fastctx_node::renewal::resume`). Nobody is waited for
+/// (`world-upgrade.md`, 换版不要人确认).
+fn waiting_for_service(root: &Path, plan: &mut Plan, why: String) -> anyhow::Result<()> {
+    plan.error = Some(why);
+    phase(root, plan, Phase::UpdatingGuardian)
+}
+
 async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
     let world = WorldDir::under(root);
     let kept = world.node_service().exists();
@@ -207,12 +216,20 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
         .identity
         .context("replacement exited before it could prepare")?,
     };
+    let began = std::time::Instant::now();
     loop {
         if !fastctx_platform::is_alive(&candidate)? {
             bail!("replacement exited before preparing; current node was left running");
         }
         if store::read_json::<fastctx_types::ProcessIdentity>(&prepared)?.as_ref() == Some(&candidate) {
             break;
+        }
+        // Preparing takes seconds; a replacement alive that never says it is
+        // ready holds the renewal's gate for nothing, so it is ended and the
+        // renewal tried again on its schedule.
+        if began.elapsed() > STALLED {
+            let _ = fastctx_platform::terminate::terminate(&candidate);
+            bail!("the replacement did not get ready in {} minutes", STALLED.as_secs() / 60);
         }
         tick().await;
     }
@@ -227,8 +244,8 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
     phase(root, plan, Phase::WaitingForIdle)?;
     let mut asked = None;
     if !matches!(current, Probe::Absent | Probe::Legacy { .. }) {
-        asked = renewal::process(&world).await?;
-        renewal::request(&world, Action::Yield).await?;
+        asked = settled(renewal::process(&world).await)?.flatten();
+        settled(renewal::request(&world, Action::Yield).await)?;
     }
     loop {
         let observed = observing(&world).await?;
@@ -258,12 +275,21 @@ async fn advance(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
         if matches!(observed, Probe::Legacy { .. }) {
             return phase(root, plan, Phase::AwaitingLegacyExit);
         }
-        let serving = renewal::process(&world).await?;
-        if serving.is_some() && serving != asked {
-            renewal::request(&world, Action::Yield).await?;
+        let serving = settled(renewal::process(&world).await)?.flatten();
+        if serving.is_some() && serving != asked && settled(renewal::request(&world, Action::Yield).await)?.is_some() {
             asked = serving;
         }
         tick().await;
+    }
+}
+
+/// What a call to a node that may be leaving came to: its answer, or none
+/// where the node went away as it was asked, to be looked at again.
+fn settled<T>(result: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    match result {
+        Ok(answer) => Ok(Some(answer)),
+        Err(error) if transient(&error) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -271,10 +297,10 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
     if !plan.keeper_restarted {
         let service =
             fastctx_install::service::Service::new(fastctx_install::service::Kind::Node, store::installed(root), root);
-        // The protected guardian takes an officially signed newer program
-        // by itself (`world-upgrade.md`, 换版不要人确认); a development build,
-        // or a guardian of an earlier release, waits for an administrator,
-        // and so does one that says why it will not, its reason kept.
+        // The protected guardian, SYSTEM's, takes an officially signed newer
+        // program by itself (`world-upgrade.md`, 换版不要人确认); one that
+        // cannot now, not running or of an earlier release, is asked again
+        // until it does, its reason kept.
         let mut refused = None;
         let staged = !needs_guardian || service.guardian_staged(&plan.candidate.build.digest)? || {
             mend_signature(root, plan);
@@ -287,34 +313,22 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
                 }
             }
         };
-        // A macOS node is the user's own LaunchAgent; only a hub kept here,
-        // a LaunchDaemon, needs an administrator to start the new program.
-        // A Linux node's unit restarts as root or by the rule its install
-        // left (`fastctx_install::service::Service::may_restart`).
+        if !staged {
+            let why = refused.unwrap_or_else(|| "the boot service has not taken the new program yet".to_string());
+            return waiting_for_service(root, plan, why);
+        }
+        // A macOS node is the user's own LaunchAgent, restarted by its user.
+        // A stopped Linux unit restarts as root, or by the rule its install
+        // left (`fastctx_install::service::Service::may_restart`); where it
+        // has none, its own checking timer, root's, starts it within a minute
+        // on the program in place now, and the bridge serves till then.
         #[cfg(target_os = "linux")]
         let restart = {
             let status = service.status()?;
-            service.main_pid()? == 0 && !status.state.starts_with("activating/")
+            service.main_pid()? == 0 && !status.state.starts_with("activating/") && service.may_restart().is_ok()
         };
         #[cfg(not(target_os = "linux"))]
         let restart = true;
-        let restart_refusal = if cfg!(target_os = "linux") && restart { service.may_restart().err() } else { None };
-        if let Some(error) = &restart_refusal {
-            refused = Some(format!("{error:#}"));
-        }
-        if !staged
-            || restart_refusal.is_some()
-            || (cfg!(target_os = "macos")
-                && !fastctx_platform::elevation::is_elevated()?
-                && !fastctx_install::service::registered_hubs(root)?.is_empty())
-        {
-            phase(root, plan, Phase::AwaitingAdministrator)?;
-            if refused.is_some() {
-                plan.error = refused;
-                store::save(root, plan)?;
-            }
-            return Ok(());
-        }
         let _gate = FileLock::acquire(&store::directory(root).join("manager-gate.lock"))?;
         let Probe::Running(node) = renewal::probe(&WorldDir::under(root)).await? else {
             bail!("no serving replacement bridge")
@@ -330,7 +344,9 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
     phase(root, plan, Phase::ReturningToService)?;
     let world = WorldDir::under(root);
     renewal::request(&world, Action::Yield).await?;
+    let began = std::time::Instant::now();
     loop {
+        returning(began)?;
         if let Probe::Running(node) = observing(&world).await?
             && !node.bridge
             && node.build.digest == plan.candidate.build.digest
@@ -356,7 +372,7 @@ async fn finish_bridge(root: &Path, plan: &mut Plan, needs_guardian: bool) -> an
 /// The guardian takes the program its node runs already, by the program's
 /// own signature, and starts again on it; the node it starts is the
 /// candidate, so the renewal is complete once it serves. A guardian that
-/// will not leaves the renewal to an administrator, no bridge waiting.
+/// will not yet is asked again (`waiting_for_service`), no bridge waiting.
 async fn guard_supervised(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
     let service =
         fastctx_install::service::Service::new(fastctx_install::service::Kind::Node, store::installed(root), root);
@@ -374,20 +390,34 @@ async fn guard_supervised(root: &Path, plan: &mut Plan) -> anyhow::Result<()> {
         }
     };
     if !staged {
-        phase(root, plan, Phase::AwaitingAdministrator)?;
-        if refused.is_some() {
-            plan.error = refused;
-            store::save(root, plan)?;
+        let why = refused.unwrap_or_else(|| "the boot service has not taken the new program yet".to_string());
+        return waiting_for_service(root, plan, why);
+    }
+    // The guardian starting again ends the node it runs: that node goes once
+    // idle first, as at a handover, so no turn under way is cut off. The node
+    // the guardian brings up meanwhile waits at the gate a service node takes
+    // first (`fastctx_node::renewal`), held here till the guardian has
+    // started again, so it takes no turn the restart would cut off.
+    let gate = FileLock::acquire(&store::directory(root).join("manager-gate.lock"))?;
+    phase(root, plan, Phase::WaitingForIdle)?;
+    let world = WorldDir::under(root);
+    if let Some(serving) = settled(renewal::process(&world).await)?.flatten() {
+        settled(renewal::request(&world, Action::Yield).await)?;
+        while let Probe::Running(node) = observing(&world).await?
+            && node.process == serving
+        {
+            tick().await;
         }
-        return Ok(());
     }
     phase(root, plan, Phase::UpdatingGuardian)?;
     let (restarting, digest) = (service.clone(), digest.clone());
     tokio::task::spawn_blocking(move || restarting.restart_guardian(&digest)).await??;
+    drop(gate);
     plan.keeper_restarted = true;
     store::save(root, plan)?;
-    let world = WorldDir::under(root);
+    let began = std::time::Instant::now();
     loop {
+        returning(began)?;
         if let Probe::Running(node) = observing(&world).await?
             && !node.bridge
             && node.build.digest == plan.candidate.build.digest
@@ -411,40 +441,44 @@ fn mend_signature(root: &Path, plan: &Plan) {
 
 /// A hub this computer keeps runs the same World program and would go on
 /// speaking the old network protocol (`world-upgrade.md`, 中枢跟着换). Once
-/// the node is back in its boot service, the hub starts again on the new
-/// program, and its machines reconnect by themselves: on Linux systemd runs
-/// it straight from the World program, on Windows its guardian takes the
-/// signed program first. Where neither can be done without an
-/// administrator, the administrator's step does it (`guardian_apply`).
+/// the node is back in its boot service, the hub is started again on the new
+/// program where its user may, and its machines reconnect by themselves: on
+/// Windows its guardian, SYSTEM's, takes the signed program first. Where its
+/// user may not, the hub follows by itself within a minute, its guardian
+/// taking the newer signed program (`windows_guardian::adopt::offered`), or,
+/// on Linux and macOS, the hub ending once it sees the program it runs from
+/// replaced by a newer one, for its service to start it again
+/// (`fastctx_hub::renewal`).
 fn follow_hubs(root: &Path, digest: &str) -> anyhow::Result<()> {
-    if !cfg!(any(windows, target_os = "linux")) {
-        return Ok(());
-    }
     for directory in fastctx_install::service::registered_hubs(root)? {
         let hub = fastctx_install::service::Service::new(
             fastctx_install::service::Kind::Hub,
             store::installed(root),
             &directory,
         );
-        if !hub.status()?.installed || (cfg!(windows) && hub.guardian_current(digest)?) {
-            continue;
+        // Where this cannot, the hub follows by itself; why it could not is
+        // still said, for whoever reads the renewal's log.
+        if let Err(error) = follow_hub(&hub, digest) {
+            eprintln!("the hub at {} follows the new program by itself: {error:#}", directory.display());
         }
-        let ready = if cfg!(windows) {
-            hub.adopt_guardian(digest)?
-        } else {
-            hub.may_restart()
-                .with_context(|| format!("authorizing restart of the hub kept at {}", directory.display()))?;
-            true
-        };
-        anyhow::ensure!(
-            ready,
-            "the hub kept at {} takes the new program once an administrator runs `fastctx renew guardian --dir {}`",
-            directory.display(),
-            if cfg!(windows) { root.display().to_string() } else { fastctx_platform::shell_quote::path(root) }
-        );
-        hub.restart_guardian(digest).with_context(|| format!("restarting the hub kept at {}", directory.display()))?;
     }
     Ok(())
+}
+
+/// Starts the hub `hub` again on the program `digest`, when it is not on it
+/// and its user may.
+fn follow_hub(hub: &fastctx_install::service::Service, digest: &str) -> anyhow::Result<()> {
+    if !hub.status()?.installed {
+        return Ok(());
+    }
+    if cfg!(windows) {
+        if hub.guardian_current(digest)? || !hub.adopt_guardian(digest)? {
+            return Ok(());
+        }
+    } else {
+        hub.may_restart()?;
+    }
+    hub.restart_guardian(digest)
 }
 
 async fn recover(root: &Path, plan: &Plan, kept: bool) -> anyhow::Result<()> {
@@ -492,6 +526,8 @@ async fn observing(world: &WorldDir) -> std::io::Result<Probe> {
     }
 }
 
+/// A node going away as it is asked: gone, refusing, closing the
+/// connection, or, on macOS, closed before the connection was looked at.
 fn transient(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
@@ -500,6 +536,8 @@ fn transient(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::UnexpectedEof
             | std::io::ErrorKind::BrokenPipe
             | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected
     )
 }
 
@@ -508,7 +546,7 @@ async fn guardian(root: &Path, graphical: bool) -> anyhow::Result<()> {
     let _ = graphical;
     let plan = store::read(root)?.context("no local replacement was staged")?;
     ensure!(
-        plan.phase == Phase::AwaitingAdministrator || plan.phase == Phase::Failed,
+        matches!(plan.phase, Phase::AwaitingAdministrator | Phase::UpdatingGuardian | Phase::Failed),
         "the replacement has not reached guardian renewal"
     );
     store::verify(&plan.candidate)?;
@@ -658,6 +696,23 @@ async fn guardian_apply(root: &Path, user_sid: Option<String>, uid: Option<u32>)
     }
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     bail!("this platform has no boot-service handover")
+}
+
+/// How long a step that takes seconds or a minute is waited for before the
+/// renewal takes it for stalled: what holds its gate is let go, the failure
+/// kept with why, and the renewal tried again on its schedule (`world-upgrade.md`,
+/// 没成的，自己再试). A turn under way is never this: it is waited for.
+const STALLED: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Fails a return to the boot service that has not come about in
+/// `STALLED`; the next try finds the node as it is then and goes on.
+fn returning(began: std::time::Instant) -> anyhow::Result<()> {
+    ensure!(
+        began.elapsed() <= STALLED,
+        "the boot service did not start the new program as its node in {} minutes",
+        STALLED.as_secs() / 60
+    );
+    Ok(())
 }
 
 async fn tick() {

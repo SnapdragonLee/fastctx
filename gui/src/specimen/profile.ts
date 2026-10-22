@@ -36,6 +36,12 @@ let profile: Profile = {
   },
 };
 
+// `?noServers`: an account that keeps none yet, its page as it starts.
+if (new URLSearchParams(location.search).has("noServers")) {
+  profile = { ...profile, servers: {} };
+  for (const servers of kept.values()) servers.clear();
+}
+
 const found: Found[] = [
   { source: { app: "claude_desktop" }, name: "unityMCP", server: { kind: "command" } },
   { source: { app: "claude_desktop" }, name: "blender", server: { kind: "command" } },
@@ -71,7 +77,7 @@ function keep(name: string, server: Server, machine: string | undefined): McpRep
 }
 
 async function answer(call: McpCall): Promise<McpReply> {
-  await pause(call.do === "test" ? 1400 : call.do === "found" ? 700 : 250);
+  await pause(call.do === "test" ? 1400 : call.do === "found" || call.do === "candidates" ? 700 : 250);
   switch (call.do) {
     case "list":
       return { reply: "listed", servers: listed() };
@@ -93,6 +99,8 @@ async function answer(call: McpCall): Promise<McpReply> {
       return keep(call.as_name, { kind: "command", command: "uvx", args: [call.name] }, call.machine);
     case "found":
       return { reply: "found", machine: call.machine ?? "desktop", servers: found };
+    case "candidates":
+      return { reply: "candidates", machine: call.machine ?? "desktop", servers: found.map(({ source, name, server }) => ({ source, name, kind: server.kind })) };
   }
 }
 

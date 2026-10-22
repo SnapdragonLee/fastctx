@@ -240,12 +240,14 @@ async fn open(inner: &Inner, upstream: &Upstream) -> Result<Opened, Ended> {
             versions: true,
             due: true,
             project_deletes: true,
+            project_entry: true,
             conversation_deletions: true,
             profiles: true,
             left: None,
             cancels: true,
             presence: true,
             parts: true,
+            call_details: true,
         },
     };
     match tokio::time::timeout(SILENCE, dial::send(&mut socket, &hello)).await {

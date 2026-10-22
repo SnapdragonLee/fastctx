@@ -199,7 +199,18 @@ pub async fn relay(node: &Arc<Node>, asker: &Asker, call: serde_json::Value) -> 
     }
     let user = Peer::Command { resident: None, session: None };
     let reply = match call {
-        Call::Page(call) => crate::pages::call(node, &crate::town::caller::Caller::User, from, call).await?,
+        Call::Project(ProjectCall::Map { town: Some(town) }) => {
+            let acting = fastctx_types::access::Acting::one(asker.hub.clone(), account.clone());
+            let map = crate::town::map::view(node, &town, &acting).await?;
+            Reply::Map { map: Box::new(map) }
+        }
+        Call::Page(mut call) => {
+            if call.account().is_some_and(|selected| selected != account) {
+                return Err(Failure::refused("the page account differs from the authenticated device account"));
+            }
+            call.for_account(account.clone());
+            crate::pages::call(node, &crate::town::caller::Caller::User, from, call).await?
+        }
         call => match crate::server::handle(node, &user, call).await? {
             Reply::Towns { towns } => {
                 Reply::Towns { towns: towns.into_iter().filter(|summary| may_use(&summary.town)).collect() }

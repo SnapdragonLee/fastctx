@@ -130,6 +130,7 @@ pub(crate) fn view_for(
         })
         .collect();
     View {
+        call_details: true,
         machine_log: true,
         hub: store.hub.id.clone(),
         hub_name: store.hub.name.clone(),
@@ -147,6 +148,7 @@ pub(crate) fn view_for(
         groups: true,
         dissolves: true,
         deletes_projects: true,
+        project_entry: true,
         deletes_project_conversations: true,
         project_deletions: crate::project_deletions::for_member(store, me),
         lan_relays: true,

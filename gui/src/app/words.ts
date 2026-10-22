@@ -111,6 +111,9 @@ export interface FocusWords {
   more(count: number): string;
   saving: string;
   failed(why: string): string;
+  /** Every machine was taken off, and the way to put them back. */
+  cleared: string;
+  undo: string;
 }
 
 export const zhFolderPicker: FolderPickerWords = {
@@ -161,6 +164,8 @@ export const zhFocus: FocusWords = {
   more: (count) => `+${count}`,
   saving: "保存中…",
   failed: (why) => `没改成：${why}`,
+  cleared: "已清空",
+  undo: "撤回",
 };
 
 export const enFocus: FocusWords = {
@@ -181,6 +186,8 @@ export const enFocus: FocusWords = {
   more: (count) => `+${count}`,
   saving: "Saving…",
   failed: (why) => `Not changed: ${why}`,
+  cleared: "Cleared",
+  undo: "Undo",
 };
 
 export interface NewTalkWords {
@@ -348,6 +355,7 @@ export const zhPresence: PresenceWords = {
   asked: (who, what) =>
     `${who} ${{ answer: "问你", command: "想运行命令", change: "想改文件", tool: "想用工具", plan: "想按计划动手", form: "等你填写", other: "等你允许", waiting: "等你回复" }[what]}`,
   finished: (who) => `${who} 回复了`,
+  compacted: "对话已压缩",
   open: "打开",
   stop: "停止",
   arrived: (name, device, login) => `新${device ? "设备" : "机器"} ${name} 加入 ${login}`,
@@ -361,6 +369,7 @@ export const enPresence: PresenceWords = {
   asked: (who, what) =>
     `${who} ${{ answer: "asks", command: "wants to run a command", change: "wants to change files", tool: "wants to use a tool", plan: "wants to start on its plan", form: "needs a form filled in", other: "needs your OK", waiting: "is waiting for your reply" }[what]}`,
   finished: (who) => `${who} replied`,
+  compacted: "Conversation compacted",
   open: "Open",
   stop: "Stop",
   arrived: (name, device, login) => `New ${device ? "device" : "machine"} ${name} joined ${login}`,
@@ -440,8 +449,6 @@ export interface SettingsWords {
   renew: string;
   renewPhase: Record<import("../world/renewal").RenewalPhase, string>;
   renewFailed(why: string): string;
-  guardian: string;
-  guardianWhy: string;
   /** A phone: what it lets the World do in the background. */
   phoneNotices: string;
   phoneNoticesOn: string;
@@ -536,7 +543,7 @@ export const zhSettings: SettingsWords = {
     staged: "新版本已就绪",
     preparing: "正在准备…",
     waiting_for_idle: "等待当前工作告一段落…",
-    awaiting_administrator: "需要管理员确认",
+    awaiting_administrator: "正在更新开机服务…",
     awaiting_legacy_exit: "等待旧版本退出，重启电脑后完成",
     updating_guardian: "正在更新开机服务…",
     returning_to_service: "正在交回开机服务…",
@@ -544,8 +551,6 @@ export const zhSettings: SettingsWords = {
     failed: "更新失败",
   },
   renewFailed: failure(zhProblems, "更新失败"),
-  guardian: "管理员确认",
-  guardianWhy: "更新开机服务，当前工作不受影响",
   phoneNotices: "通知",
   phoneNoticesOn: "已允许",
   phoneNoticesOff: "未允许",
@@ -655,7 +660,7 @@ export const enSettings: SettingsWords = {
     staged: "Update ready",
     preparing: "Preparing…",
     waiting_for_idle: "Waiting for current work to pause…",
-    awaiting_administrator: "Needs administrator approval",
+    awaiting_administrator: "Updating startup service…",
     awaiting_legacy_exit: "Waiting for the old version to exit; finishes after a restart",
     updating_guardian: "Updating startup service…",
     returning_to_service: "Handing back to the startup service…",
@@ -663,8 +668,6 @@ export const enSettings: SettingsWords = {
     failed: "Update failed",
   },
   renewFailed: failure(enProblems, "Update failed"),
-  guardian: "Approve as administrator",
-  guardianWhy: "Updates the startup service; current work continues",
   phoneNotices: "Notifications",
   phoneNoticesOn: "Allowed",
   phoneNoticesOff: "Not allowed",
@@ -1187,6 +1190,7 @@ export const zhComposer: ComposerWords = {
     retry: "重试",
     size: (bytes) => sizeOf(bytes, ["B", "KB", "MB", "GB"]),
     wait: "文件上传完成后再发送",
+    imagesOnly: "没有你的电脑在线，存不了这个文件",
   },
   asks: {
     waiting: "等待确认",
@@ -1288,7 +1292,6 @@ export const zhComposer: ComposerWords = {
   },
   said: {
     model: (model, effort) => `下一轮起使用 ${model}${effort ? `（${effort}）` : ""}`,
-    compact: "正在压缩…",
     rewind: "已回退，文件改动未撤销",
     review: "正在审查…",
     skill: (name) => `已发送 /${name}`,
@@ -1405,6 +1408,7 @@ export const enComposer: ComposerWords = {
     retry: "Retry",
     size: (bytes) => sizeOf(bytes, ["B", "KB", "MB", "GB"]),
     wait: "Wait for uploads to finish",
+    imagesOnly: "None of your computers is online to keep this file",
   },
   asks: {
     waiting: "Needs your approval",
@@ -1506,7 +1510,6 @@ export const enComposer: ComposerWords = {
   },
   said: {
     model: (model, effort) => `Using ${model}${effort ? ` (${effort})` : ""} from the next turn`,
-    compact: "Compacting…",
     rewind: "Rewound; file changes were kept",
     review: "Reviewing…",
     skill: (name) => `Sent /${name}`,

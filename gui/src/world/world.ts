@@ -66,6 +66,9 @@ export interface Now {
   /** The start of the last message of the latest turn that ended: what a
    *  notification of that turn says. */
   last_said?: string;
+  /** The latest turn that ended compacted the context and said nothing
+   *  after it: what a notification of that turn says. */
+  last_compacted?: boolean;
   /** What the agent asked the user and has not had answered. */
   asked?: Asked;
 }
@@ -189,6 +192,13 @@ export interface MachineFacts {
   /** It keeps and runs an account's command MCP servers; older nodes do
    *  not. */
   mcp?: boolean;
+  /** It lists what can be imported by name and kind alone, and reads a
+   *  chosen server again to import it. */
+  mcp_import?: boolean;
+  /** It keeps what a page is agreed to do, and does it, for one account. */
+  page_accounts?: boolean;
+  /** It says where an attached file may be kept before any of it comes. */
+  attachment_places?: boolean;
   name: MachineName;
   os: string;
   arch: string;
@@ -236,6 +246,9 @@ export interface HubNodes {
   logins: AccountName[];
   /** The account this computer is registered under there. */
   home: AccountName | null;
+  /** What each login may do on this computer itself, as the hub's
+   *  directory decides it; absent from a node before 1.0.1-beta.10. */
+  here?: [AccountName, Rights][];
   machines: Node[];
 }
 
