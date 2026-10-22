@@ -54,6 +54,9 @@ import { composing } from "../typing";
  *  holds before what comes before its newest turns is let go, down to how
  *  many (`ConversationPage.bound`). */
 const HELD_MOST = 6000;
+/** How long a choice cleared of every machine can be taken back, as long as
+ *  a change on the machines page can. */
+const FOCUS_UNDO_MS = 6_000;
 /** How many screens from what is in view a part may be and still be held,
  *  whatever the page holds: the reader goes on into it. */
 const KEEP_SCREENS = 3;
@@ -910,6 +913,7 @@ export class ConversationPage {
   leave(): void {
     phoneWide.removeEventListener("change", this.placeDial);
     clearTimeout(this.offersAgain);
+    clearTimeout(this.focusUndoTimer);
     cancelAnimationFrame(this.frame);
     this.view.destroy();
     this.badge?.dispose();
@@ -1821,7 +1825,11 @@ export class ConversationPage {
             : command.control === "fork"
               ? { do: "fork", through: null }
               : { do: "command", name: command.name, args, ...(command.path ? { path: command.path } : {}) });
-    if (!quiet) this.say(words.running(command.name));
+    // A node that tells commands in the conversation shows them there, as
+    // they run and as they end; the line beside the input says only what
+    // never reached it.
+    const told = Boolean(this.offered?.controls_told);
+    if (!quiet && !told) this.say(words.running(command.name));
     try {
       const done = await controls.control(what);
       // Taken to do once the turn ends: its line above the input says so.
@@ -1835,21 +1843,15 @@ export class ConversationPage {
       // nothing else changed for it to be asked again.
       if (quiet && (done.kind === "done" || done.kind === "reported" || done.kind === "selected")) return true;
       if (done.kind === "forked") {
-        this.say(words.done(command.name));
+        this.say("");
         controls.forked(done.resident);
         return true;
       }
       // The fork exists but not all of it came over: it opens, and why is said.
       if (done.kind === "fork_incomplete") {
-        this.say(words.forkIncomplete, done.why, true);
+        if (told) this.say("");
+        else this.say(words.forkIncomplete, done.why, true);
         controls.forked(done.resident);
-        return true;
-      }
-      if (done.kind === "side_answer") {
-        const reply = done.reply !== null && typeof done.reply === "object" && !Array.isArray(done.reply) ? done.reply : {};
-        const text = typeof reply.text === "string" ? reply.text : JSON.stringify(done.reply, null, 2);
-        this.say("");
-        this.showSaid(`/${command.name}`, `<div class="prose">${render(text)}</div>`);
         return true;
       }
       if (done.kind === "agents" || done.kind === "agent_messages") return true;
@@ -1860,31 +1862,37 @@ export class ConversationPage {
         this.modelPanel?.show(true);
         return true;
       }
+      if (told) {
+        this.say("");
+        void this.askOffers();
+        return done.kind !== "refused";
+      }
+      if (done.kind === "side_answer") {
+        const reply = done.reply !== null && typeof done.reply === "object" && !Array.isArray(done.reply) ? done.reply : {};
+        const text = typeof reply.text === "string" ? reply.text : JSON.stringify(done.reply, null, 2);
+        this.say("");
+        this.showSaid(`/${command.name}`, `<div class="prose">${render(text)}</div>`);
+        return true;
+      }
       if (done.kind === "refused") {
         this.say(done.current_model ? words.refusedOn(done.said, done.current_model) : done.said, "", true);
         void this.askOffers();
         return false;
       }
-      if (done.kind === "reported") {
-        const shown = done.said === null ? null : shownOf(command.name, what, done.said, words.said);
-        if (shown?.kind === "panel") {
-          this.say("");
-          this.showSaid(shown.title, shown.html);
-        } else this.say(shown?.text || words.reported(command.name));
-        void this.askOffers();
-        return true;
-      }
       const model = what.do === "model" ? this.offered?.models.find((m) => m.id === what.model) : undefined;
-      const said = done.kind === "done" ? done.said : null;
-      const shown = shownOf(command.name, what.do === "model" && model ? { ...what, model: model.name ?? model.id } : what, said, words.said);
+      const said = done.kind === "done" || done.kind === "reported" ? done.said : null;
+      const shown = said === null && done.kind === "reported" ? null : shownOf(command.name, what.do === "model" && model ? { ...what, model: model.name ?? model.id } : what, said, words.said);
       if (shown?.kind === "panel") {
         this.say("");
         this.showSaid(shown.title, shown.html);
-      } else this.say(shown?.text ?? words.done(command.name));
+      } else this.say(shown ? shown.text : done.kind === "reported" ? words.reported(command.name) : words.done(command.name));
       void this.askOffers();
       return true;
     } catch (error) {
-      this.say(words.failed(detailOf(error)), detailOf(error), true);
+      // One the node told in the conversation is said there.
+      const failure = typeof error === "object" && error !== null ? (error as { code?: unknown }) : null;
+      if (told && failure?.code === "told") this.say("");
+      else this.say(words.failed(detailOf(error)), detailOf(error), true);
       return false;
     }
   }
@@ -1969,6 +1977,8 @@ export class ConversationPage {
   /** What the panel holds while it is open. */
   private focusDraft: Focus | null = null;
   private focusSaving = false;
+  /** While a choice cleared of every machine can be taken back. */
+  private focusUndoTimer = 0;
 
   /** The strip under the head: the machines and folders it is pointed at,
    *  which open the panel to change them; a change is kept, and told to
@@ -2033,7 +2043,14 @@ export class ConversationPage {
     const next = this.focusDraft;
     this.focusDraft = null;
     if (!before || !next || sameFocus(before, next)) return;
-    const state = strip.querySelector<HTMLElement>(".focus-state")!;
+    // A choice left with no machine at all may be a slip of the hand: it can
+    // be taken back for a moment.
+    this.saveFocus(focus, before, next, before.machines.length > 0 && next.machines.length === 0);
+  }
+
+  private saveFocus(focus: NonNullable<PageOptions["focus"]>, before: Focus, next: Focus, undoable: boolean): void {
+    const state = this.element.querySelector<HTMLElement>(".focus-state")!;
+    clearTimeout(this.focusUndoTimer);
     this.focusSaving = true;
     this.options.someone.focus = next;
     this.drawFocus();
@@ -2042,7 +2059,8 @@ export class ConversationPage {
     focus
       .set(next)
       .then((unfinished) => {
-        state.textContent = unfinished.join(" ");
+        if (undoable && !unfinished.length) this.offerFocusUndo(focus, before, next);
+        else state.textContent = unfinished.join(" ");
       })
       .catch((error: unknown) => {
         this.options.someone.focus = before;
@@ -2053,6 +2071,21 @@ export class ConversationPage {
         this.focusSaving = false;
         this.drawFocus();
       });
+  }
+
+  /** Says the choice was cleared, with the way to take it back, for as long
+   *  as the machines page offers its own. */
+  private offerFocusUndo(focus: NonNullable<PageOptions["focus"]>, before: Focus, cleared: Focus): void {
+    const state = this.element.querySelector<HTMLElement>(".focus-state")!;
+    state.innerHTML = `<span class="focus-cleared">${escape(focus.words.cleared)}</span><button class="text-button focus-undo" type="button">${escape(focus.words.undo)}</button>`;
+    state.querySelector(".focus-undo")!.addEventListener("click", () => {
+      state.textContent = "";
+      if (this.focusSaving) return;
+      this.saveFocus(focus, cleared, before, false);
+    });
+    this.focusUndoTimer = window.setTimeout(() => {
+      if (state.querySelector(".focus-undo")) state.textContent = "";
+    }, FOCUS_UNDO_MS);
   }
 
   /** The strip as the conversation stands: shown where the user may point
@@ -2138,9 +2171,17 @@ export class ConversationPage {
     const name = controlName(row);
     const result = row.result;
     if (row.state === "cancelled") return;
+    // A fork done later opens as one done at once does.
+    if (result?.kind === "forked" || result?.kind === "fork_incomplete") this.options.controls?.forked(result.resident);
+    if (this.offered?.controls_told) {
+      void this.askOffers();
+      return;
+    }
     if (row.state === "failed") this.say(words.failed(row.error ?? ""), row.error ?? "", true);
     else if (row.state === "uncertain") this.say(words.unknownOutcome(name), row.error ?? "", true);
     else if (result?.kind === "refused") this.say(result.said, "", true);
+    else if (result?.kind === "fork_incomplete") this.say(words.forkIncomplete, result.why, true);
+    else if (name === "compact" || result?.kind === "forked") this.say("");
     else if (result?.kind === "reported") this.say(result.said ?? words.reported(name));
     else this.say(words.done(name));
     void this.askOffers();

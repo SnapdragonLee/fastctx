@@ -1503,6 +1503,11 @@ async fn write(
             "files on {target} are written there: `on {target} edit PATH` or `on {target} write PATH` in the run tool"
         )));
     }
+    // Written here only for an account that may work here, as a run is:
+    // an agent assisting another account writes nothing on its owner's
+    // computer.
+    let acting = node.residents.about(&resident).map(|(about, _)| about.acting).unwrap_or_default();
+    node.works_here(&acting).map_err(Failure::not_run)?;
     let here = node.machine();
     let started_at = jiff::Timestamp::now();
     let owner = Address { machine: here.clone(), resident: resident.clone() };
@@ -1613,7 +1618,15 @@ fn machines(
     resident: Option<&ResidentId>,
     login: Option<&fastctx_types::collab::Caller>,
 ) -> Result<Reply, Failure> {
-    let acting = resident.and_then(|resident| crate::here::acting(node, resident)).unwrap_or_default();
+    // A session that names a conversation this computer does not know is
+    // told of no machine, never of those of whom the computer is.
+    let acting = match resident {
+        Some(resident) => match crate::here::acting(node, resident) {
+            Some(acting) => acting,
+            None => return Ok(Reply::Machines { here: None, others: Vec::new(), groups: Vec::new(), collab: None }),
+        },
+        None => fastctx_types::access::Acting::Here,
+    };
     // This computer is one of them only where the accounts may work here.
     let here_too = crate::around::works_here(node, &acting);
     let (here, others, groups) = crate::world::grouped_machines(node, &acting, here_too);

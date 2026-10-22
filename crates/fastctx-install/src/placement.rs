@@ -14,6 +14,24 @@ pub fn ensure(root: &Path, source: &Path) -> anyhow::Result<PathBuf> {
     let mut source = source;
     if installed.is_file() {
         let current = crate::program::inspect(&installed)?;
+        // This very program is in place already, and no replacement by it is
+        // still under way, or one is past publishing it, its boot service
+        // still to take it, which goes on by itself: there is nothing to
+        // place, nor to wait for.
+        if current == candidate
+            && crate::renewal::read(root)?.is_none_or(|plan| {
+                plan.candidate.build != candidate
+                    || matches!(
+                        plan.phase,
+                        Phase::Complete
+                            | Phase::AwaitingAdministrator
+                            | Phase::UpdatingGuardian
+                            | Phase::ReturningToService
+                    )
+            })
+        {
+            return Ok(installed);
+        }
         if current != candidate && !crate::program::newer(&candidate, &current)? {
             source = &installed;
         }
@@ -46,10 +64,13 @@ pub fn ensure(root: &Path, source: &Path) -> anyhow::Result<PathBuf> {
             Phase::Failed => {
                 bail!("kernel renewal failed: {}", plan.error.unwrap_or_else(|| "no failure detail recorded".into()))
             }
-            Phase::AwaitingAdministrator => bail!(
-                "kernel is serving; completing its boot-service handover needs `fastctx renew guardian --dir {}`",
-                root.display()
-            ),
+            // Published and serving, its boot service still to take it,
+            // which goes on by itself: the program is in place.
+            Phase::AwaitingAdministrator | Phase::UpdatingGuardian | Phase::ReturningToService
+                if crate::renewal::digest(&installed)? == plan.candidate.build.digest =>
+            {
+                return Ok(installed);
+            }
             Phase::AwaitingLegacyExit => {
                 bail!("the prepared kernel waits for the legacy node to exit; the installed program has not changed")
             }
