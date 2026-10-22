@@ -186,6 +186,11 @@ function keptView(): View {
  *  (`UpdateCall::Preferences`); earlier ones take the whole of them. */
 const PREFERENCES_SINCE = "1.0.1-beta.8";
 
+/** The first release whose node takes an update kept for it past a change
+ *  of World program of its own stuck on the way; an earlier one online is
+ *  also asked at once, which it takes regardless. */
+const ARRANGED_PAST_STUCK_SINCE = "1.0.1-beta.10";
+
 /** How often the update view asks while it is shown, and while the page
  *  is out of sight. */
 const UPDATES_EVERY_MS = 2500;
@@ -950,6 +955,16 @@ export class MachinesPage implements Page {
         for (const name of names) this.sayOnRow(written(name), words.notScheduled(error instanceof Error ? error.message : String(error)));
       }
     }
+    if (version !== null) {
+      const stuck = machines.filter((machine) => machine.online && machine.kernel && compareVersions(machine.kernel, ARRANGED_PAST_STUCK_SINCE) < 0);
+      await inTurns(stuck, WAYS_AT_ONCE, async (machine) => {
+        try {
+          await updates.remote(machine.machine, { do: "kernel", version });
+        } catch (error) {
+          this.sayOnRow(machine.machine, words.notScheduled(error instanceof Error ? error.message : String(error)));
+        }
+      });
+    }
     await this.askUpdates();
   }
 
@@ -1467,8 +1482,13 @@ export class MachinesPage implements Page {
       );
       if (html !== this.listed) {
         this.listed = html;
+        // The update view's machines scroll on their own, and are where
+        // they were after each drawing.
+        const scrolled = this.list.querySelector<HTMLElement>(".uv-rows")?.scrollTop ?? 0;
         redrawKeepingFocus(this.list, () => {
           this.list.innerHTML = html;
+          const rows = this.list.querySelector<HTMLElement>(".uv-rows");
+          if (rows) rows.scrollTop = scrolled;
         });
       }
     }

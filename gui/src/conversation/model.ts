@@ -130,6 +130,9 @@ export type Entry = {
    *  and the conversation was told of it here: by the host's notice, or,
    *  in Codex, by an item of the turn. */
   | { kind: "agent-told"; key: string; agent: string; end: HostAgentEnd; item?: string; turn?: string }
+  /** A command the user gave it, from when it began: while it runs, and
+   *  what came of it (`world-gui.md`, 对话). */
+  | { kind: "command"; key: string; row: PendingControl }
 );
 
 /** One stretch of what a turn did between things it said: tools and
@@ -615,6 +618,7 @@ export class Fold {
           if (row && typeof row.id === "string") {
             this.controlStates.set(row.id, row);
             this.controlsChanged = true;
+            this.command(row);
           }
           return;
         }
@@ -1061,6 +1065,20 @@ export class Fold {
   /** Where each control the node took to do later stands, as its last
    *  event said. */
   private readonly controlStates = new Map<string, PendingControl>();
+
+  /** A command as it stands: shown from when it began, one waiting in the
+   *  queue above the input still, one withdrawn never. */
+  private command(row: PendingControl): void {
+    const key = `c:${row.id}`;
+    const entry = this.byKey.get(key);
+    if (entry?.kind === "command") {
+      entry.row = row;
+      this.touch(entry);
+      return;
+    }
+    if (row.state === "waiting" || row.state === "cancelled") return;
+    this.add({ kind: "command", key, stamp: 0, at: 0, row });
+  }
 
   /** Whether a control the node took moved on since last asked. */
   takeControlsChanged(): boolean {
