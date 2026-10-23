@@ -23,6 +23,33 @@ use crate::{AgentName, ResidentId, TownName};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "call")]
 pub enum RemoteCall {
+    /// The actual directory this machine would use for this conversation.
+    Scratch {
+        owner: crate::Address,
+    },
+    /// A running job returns a plan operation to its resident's home through the hub.
+    Plan {
+        resident: ResidentId,
+        operation: crate::plan::Operation,
+    },
+    Collaboration {
+        resident: ResidentId,
+        colleagues: bool,
+    },
+    /// Replica paths on an account's own computer, without any document bytes.
+    MemoryFolders {
+        town: TownName,
+    },
+    Goal { resident: ResidentId, request: crate::goals::Request },
+    ConversationDebt { resident: ResidentId, requester: crate::Address },
+    WaitingJobs { owner: crate::Address },
+    SentinelControl { request: crate::sentinel_control::Request },
+    SentinelHome { request: crate::sentinel_control::HomeRequest },
+    SentinelSettings { change: Option<crate::sentinel_settings::WriteSettings> },
+    /// Keeps or removes one of the account's sentinel keys on its home.
+    SentinelKey { key: crate::sentinel_settings::KeyName, value: Option<crate::sentinel_settings::Secret> },
+    /// Which of the account's sentinel keys its home holds.
+    SentinelKeys,
     /// A running job returns its resident's project selection to its home.
     /// This call is relayed and authorized by a hub supporting project entry.
     EnterProject {
@@ -286,6 +313,8 @@ pub enum RemoteCall {
     /// working for the one account named by the call's envelope.
     Ask {
         asker: ResidentId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requester_turn: Option<String>,
         town: Option<TownName>,
         label: String,
         prompt: String,
@@ -358,6 +387,8 @@ pub enum RemoteCall {
     /// connection until the caller closes it, each piece signed by the
     /// machine that holds the session, naming `watch` and numbered from 0.
     Watch {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        goal: bool,
         resident: ResidentId,
         watch: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -494,14 +525,22 @@ impl RemoteCall {
     /// check it.
     pub fn purpose(&self) -> Purpose {
         match self {
-            Self::EnterProject { .. } => Purpose::Echo,
+            Self::Goal { request: crate::goals::Request::Read, .. } => Purpose::Look,
+            Self::Goal { .. } => Purpose::Agents,
+            Self::EnterProject { .. } | Self::Plan { .. } => Purpose::Echo,
+            Self::SentinelSettings { .. } | Self::SentinelControl { .. } | Self::SentinelKeys => Purpose::Look,
+            Self::SentinelKey { .. } => Purpose::Hands,
+            Self::SentinelHome { request: crate::sentinel_control::HomeRequest::Inspect { .. } } => Purpose::Look,
+            Self::SentinelHome { .. } => Purpose::Hands,
             RemoteCall::PageAction { action: crate::pages::PageInvocation::Say { .. }, .. } => Purpose::Words,
             RemoteCall::ReadAttachment { attachment: crate::attachments::AttachmentSource::Upload(file), .. }
                 if file.owner != *file.conversation() =>
             {
                 Purpose::Hands
             }
-            RemoteCall::Mcp { .. }
+            RemoteCall::MemoryFolders { .. }
+            | RemoteCall::Scratch { .. }
+            | RemoteCall::Mcp { .. }
             | RemoteCall::McpServe { .. }
             | RemoteCall::Run { .. }
             | RemoteCall::WordsCame { .. }
@@ -539,7 +578,8 @@ impl RemoteCall {
             | RemoteCall::UpdateWorld
             | RemoteCall::Updates { .. }
             | RemoteCall::Stats { .. } => Purpose::Hands,
-            RemoteCall::AttachmentPlaces { .. }
+            RemoteCall::Collaboration { .. }
+            | RemoteCall::AttachmentPlaces { .. }
             | RemoteCall::ReserveAttachment { .. }
             | RemoteCall::CommitAttachment { .. }
             | RemoteCall::Composer { .. }
@@ -561,6 +601,8 @@ impl RemoteCall {
             | RemoteCall::ReadAgentLimits { .. }
             | RemoteCall::AgentUsage { .. }
             | RemoteCall::AgentCalls { .. }
+            | RemoteCall::ConversationDebt { .. }
+            | RemoteCall::WaitingJobs { .. }
             | RemoteCall::Look { .. }
             | RemoteCall::Find { .. }
             | RemoteCall::Who { .. }
@@ -576,6 +618,21 @@ impl RemoteCall {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "reply")]
 pub enum RemoteReply {
+    Scratch {
+        path: String,
+    },
+    Plan {
+        result: crate::plan::Result,
+    },
+    Collaboration(Box<crate::collaboration::Tree>),
+    MemoryFolders(crate::memory::Folders),
+    Goal { updated: Box<crate::goals::Updated> },
+    ConversationDebt { debt: crate::turn_evidence::ConversationDebt },
+    WaitingJobs { jobs: Vec<crate::turn_evidence::WaitHandle> },
+    SentinelControl(Box<crate::sentinel_control::Reply>),
+    SentinelHome(Box<crate::sentinel_control::HomeReply>),
+    SentinelSettings(Box<crate::sentinel_settings::SettingsReply>),
+    SentinelKeys(crate::sentinel_settings::KeyStatus),
     Entered {
         town: TownName,
         map: Box<crate::project::MapView>,

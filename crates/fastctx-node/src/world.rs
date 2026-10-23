@@ -570,6 +570,8 @@ pub fn facts(node: &Node) -> MachineFacts {
         path.map(|path| native(&path)).unwrap_or_else(|error| format!("(not known: {error})"))
     };
     MachineFacts {
+        turn_debts: true,
+        goal_runtime: node.goals.available(),
         name: node.machine(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
@@ -578,6 +580,8 @@ pub fn facts(node: &Node) -> MachineFacts {
         path_separator: if cfg!(windows) { ';' } else { ':' },
         case_sensitive: !cfg!(any(windows, target_os = "macos")),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        sentinels: true,
+        sentinel_look: true,
         completion_receipts: true,
         upload_resumes: true,
         attachment_references: true,
@@ -586,6 +590,8 @@ pub fn facts(node: &Node) -> MachineFacts {
         mcp_import: true,
         page_accounts: true,
         attachment_places: true,
+        memory_folders: true,
+        collaboration_tree: true,
         shell: shell(),
         form: Some(form()),
         node_lifetime: Some(Box::new(node.lifetime.clone())),
@@ -823,11 +829,15 @@ impl fastctx_net::link::Node for Handler {
                         .map(|(taken, following)| RemoteReply::OnReceipt { taken, following })
                         .map_err(|error| Failure::new(format!("reading the on receipt: {error}")))
                 }
-                RemoteCall::Follow { origin, job, out_from, err_from } => {
+                RemoteCall::Follow { mut origin, job, out_from, err_from } => {
+                    if origin.sentinel.is_some() { origin.account = Some(HubAccount {hub:hub.clone(),account:caller.account.clone()}); }
                     let stream = stream.ok_or_else(|| Failure::new("following an on needs a data connection"))?;
                     crate::on::serve_follow(&node, origin, job, out_from, err_from, stream).await
                 }
-                RemoteCall::StopOn { origin, job } => crate::on_stop::serve(&node, origin, job).await,
+                RemoteCall::StopOn { mut origin, job } => {
+                    if origin.sentinel.is_some() { origin.account = Some(HubAccount {hub:hub.clone(),account:caller.account.clone()}); }
+                    crate::on_stop::serve(&node, origin, job).await
+                },
                 RemoteCall::StopJob { job, by } => {
                     // The user is the user on whichever of their machines they
                     // asked; an agent is named with where it lives.
@@ -840,11 +850,11 @@ impl fastctx_net::link::Node for Handler {
                         .await
                         .map(|record| RemoteReply::JobStopped { record: record.map(Box::new) })
                 }
-                RemoteCall::Ask { asker: resident, town, label, prompt, started } => {
+                RemoteCall::Ask { asker: resident, requester_turn, town, label, prompt, started } => {
                     let acting = Acting::one(hub.clone(), caller.account.clone());
                     let asker = Address { machine: from, resident };
                     let colleague =
-                        crate::colleagues::ask_here(&node, asker, acting, town, label, prompt, started).await?;
+                        crate::colleagues::ask_here(&node, crate::colleagues::Requester { address: asker, turn: requester_turn }, acting, town, label, prompt, started).await?;
                     Ok(RemoteReply::Asked { colleague })
                 }
                 RemoteCall::Talk { to, text, attachments, files_on, id } => {
@@ -852,10 +862,10 @@ impl fastctx_net::link::Node for Handler {
                         .await
                         .map(|landed| RemoteReply::Said { landed })
                 }
-                RemoteCall::Watch { resident, watch, composer, held, now } => {
+                RemoteCall::Watch { resident, watch, composer, held, now, goal } => {
                     let stream = stream
                         .ok_or_else(|| Failure::new("a watch comes with a data connection, and this one had none"))?;
-                    crate::talk::serve_watch(&node, &link, &from, resident, watch, composer, held, now, stream).await
+                    crate::talk::serve_watch(&node, &asker, &link, &from, resident, watch, composer, held, now, goal, stream).await
                 }
                 RemoteCall::Agents => crate::agents::here(&node)
                     .await
@@ -968,6 +978,16 @@ impl fastctx_net::link::Node for Handler {
                 RemoteCall::Offers { resident } => crate::control::offers_here(&node, &resident)
                     .await
                     .map(|offers| RemoteReply::Offers(Box::new(crate::admission::seen::offers(&asker, offers)))),
+                RemoteCall::WaitingJobs { owner } => {
+                    crate::turn_evidence::waiting::jobs_here(&node, &owner, Some(&asker))
+                        .map(|jobs| RemoteReply::WaitingJobs { jobs })
+                        .map_err(|error| Failure::new(error.to_string()))
+                }
+                RemoteCall::ConversationDebt { resident, requester } => {
+                    crate::turn_evidence::debts::here(&node, &resident, &requester)
+                        .map(|debt| RemoteReply::ConversationDebt { debt })
+                        .map_err(|error| Failure::new(error.to_string()))
+                }
                 RemoteCall::Look { id } => {
                     let (looked, mut jobs) = crate::look::look_here(&node, &id).await?;
                     jobs.retain(|job| crate::admission::seen::job(&node, &asker, job));
@@ -995,12 +1015,16 @@ impl fastctx_net::link::Node for Handler {
                         reply,
                     ))
                 }),
-                RemoteCall::Canon { path } => {
-                    tokio::task::spawn_blocking(move || crate::town::map::heads(std::path::Path::new(&path)))
+                RemoteCall::Canon { .. } => Err(Failure::not_run(fastctx_types::memory::LEGACY)),
+                RemoteCall::MemoryFolders { town } => {
+                    crate::memory::folders::here_for(&node, &asker, &town).map(RemoteReply::MemoryFolders)
+                }
+                RemoteCall::Plan { resident, operation } => {
+                    let account =
+                        fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::plan::here(&node, &resident, None, None, Some(&account), operation)
                         .await
-                        .map_err(|error| Failure::new(error.to_string()))?
-                        .map(|heads| RemoteReply::Canon { heads })
-                        .map_err(|error| Failure::new(format!("reading the canon on {machine}: {error}")))
+                        .map(|result| RemoteReply::Plan { result })
                 }
                 RemoteCall::EnterProject { resident, town } => {
                     let account =
@@ -1009,7 +1033,38 @@ impl fastctx_net::link::Node for Handler {
                         .await
                         .map(|map| RemoteReply::Entered { town, map: Box::new(map) })
                 }
+                RemoteCall::Goal { resident, request } => {
+                    let account = fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::goals::calls::user_here(&node, resident, account, from, request).await
+                        .map(|updated| RemoteReply::Goal { updated: Box::new(updated) })
+                }
+                RemoteCall::Scratch { owner } => Ok(RemoteReply::Scratch { path: crate::scratch::here(&node, &owner) }),
+                RemoteCall::SentinelControl { request } => {
+                    if matches!(request, fastctx_types::sentinel_control::Request::Create { .. }) {
+                        return Err(Failure::refused("a conversation registers a sentinel through its own command"));
+                    }
+                    crate::sentinels::control(&node, &crate::town::caller::Caller::User, &link, &caller.account, request).await.map(|reply| RemoteReply::SentinelControl(Box::new(reply)))
+                }
+                RemoteCall::SentinelHome { request } => {
+                    let scope = fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::sentinels::home_call(&node, &scope, &request).await.map(|reply| RemoteReply::SentinelHome(Box::new(reply))).map_err(Failure::new)
+                }
+                RemoteCall::SentinelSettings { change } => crate::sentinels::settings(&node, &link, &caller.account, change).await.map(|reply| RemoteReply::SentinelSettings(Box::new(reply))),
+                RemoteCall::SentinelKey { key, value } => {
+                    let scope = fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::sentinels::keys::keep_here(&node, &scope, key, value).await.map(RemoteReply::SentinelKeys)
+                }
+                RemoteCall::SentinelKeys => {
+                    let scope = fastctx_types::access::HubAccount { hub: hub.clone(), account: caller.account.clone() };
+                    crate::sentinels::keys::status_here(&node, &scope).map(RemoteReply::SentinelKeys)
+                }
                 RemoteCall::Facts => Ok(RemoteReply::Facts(facts(&node))),
+                RemoteCall::Collaboration { resident, colleagues } => {
+                    let acting = Acting::one(asker.hub.clone(), asker.account.clone());
+                    crate::colleagues::tree::here(&node, &resident, &acting, colleagues)
+                        .await
+                        .map(|tree| RemoteReply::Collaboration(Box::new(tree)))
+                }
                 RemoteCall::AttachmentReferences { conversation, attachments } => {
                     if !node.is_me(&conversation.machine)
                         || attachments.iter().any(|file| file.conversation().resident != conversation.resident)
@@ -1153,14 +1208,21 @@ impl fastctx_net::link::Node for Handler {
                     }
                     Letter::Notice { to, notice } => {
                         let notice = *notice;
-                        if let Notice::JobEnded { job, machine, .. } = &notice {
+                        if let Notice::JobEnded { job, machine, scratch, .. } = &notice {
+                            if !scratch.is_empty() {
+                                let link = node
+                                    .link_of(&hub)
+                                    .ok_or_else(|| io::Error::other("the sending hub is no longer connected"))?;
+                                crate::scratch::observed(&node, &to, &node.written(&link, &from), scratch)?;
+                            }
                             crate::here::ended_elsewhere(&node, &to, machine, job);
                         }
                         let delivery = Delivery { id: delivery_id, at: Timestamp::now(), notice };
                         if crate::on_delivery::park_from(&node, &to, &delivery, Some(&identity))? {
                             return Ok(Ok(()));
                         }
-                        match crate::speech::tell_here(&node, &to, delivery, Owed::Working).await {
+                        let owed = if matches!(delivery.notice, Notice::Sentinel { .. }) { Owed::Nobody } else { Owed::Working };
+                        match crate::speech::tell_here(&node, &to, delivery, owed).await {
                             Ok(_) => Ok(Ok(())),
                             Err(failure) => Err(io::Error::other(failure.message)),
                         }
@@ -1270,6 +1332,14 @@ impl fastctx_net::link::Node for Handler {
 
     /// Someone may have logged in to an account this computer is logged in
     /// to: its user is told who, from the views before and after.
+    fn account_record_changed(&self, change: &fastctx_types::account_records::Changed) {
+        if change.metadata.kind == fastctx_types::plan::KIND
+            && let Some(node) = self.node.upgrade()
+        {
+            crate::context::request_all(&node);
+        }
+    }
+
     fn directory_changed(&self) {
         let Some(node) = self.node.upgrade() else { return };
         if let Err(error) = crate::mcp::store::sweep(&node, &self.hub) {

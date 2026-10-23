@@ -66,16 +66,11 @@ export interface Tally {
 
 /** The host's own agents, as a conversation shows them (`agents.ts`). */
 export interface AgentWords {
-  /** The panel of them, and its mark beside the input. */
-  title: string;
-  /** How many still work, beside the title and on the mark. */
-  running(n: number): string;
   /** How one stands where its row does not say it by its mark. */
   failed: string;
   stopped: string;
   waiting: string;
-  /** What it was asked, at the head of what it did; opened in full. */
-  asked: string;
+  /** What it was asked, at the head of what it did, opened in full. */
   more: string;
   less: string;
   /** Its own record, read from its conversation's machine. */
@@ -89,10 +84,6 @@ export interface AgentWords {
   stoppedTold(task: string | null): string;
   /** What it used, at the foot of what it did. */
   tools(n: number): string;
-  /** Each of them in the panel: goes to it in the conversation. */
-  goTo: string;
-  /** The panel's clock ends now while one of them works. */
-  now: string;
   /** A call that names agents the conversation does not hold. */
   unknownAgents(n: number): string;
 }
@@ -299,6 +290,10 @@ export interface Words {
   stillRunning: string;
   /** Before a job is stopped by the user, and when it could not be. */
   stopJobAsk: string;
+  /** A sentinel the conversation left: withdrawing it, and how it stands. */
+  withdrawSentinel: string;
+  withdrawSentinelAsk: string;
+  sentinelPhase(phase: "starting" | "watching" | "satisfied" | "unable" | "withdrawn" | "unavailable"): string;
   notStopped: string;
   cancel: string;
   /** A job's output opened under its row. */
@@ -595,12 +590,9 @@ export const zh: Words = {
   },
   openColleague: "查看",
   agents: {
-    title: "子代理",
-    running: (n) => `${n} 个在工作`,
     failed: "失败",
     stopped: "已停止",
     waiting: "在等",
-    asked: "任务",
     more: "展开",
     less: "收起",
     reading: "正在读取…",
@@ -610,12 +602,14 @@ export const zh: Words = {
     failedTold: (task) => (task ? `子代理失败：${task}` : "子代理失败"),
     stoppedTold: (task) => (task ? `子代理已停止：${task}` : "子代理已停止"),
     tools: (n) => `${n} 次工具调用`,
-    goTo: "转到它",
-    now: "现在",
     unknownAgents: (n) => `${n} 个子代理`,
   },
-  stillRunning: "运行中的命令",
+  stillRunning: "还在跑的",
   stopJobAsk: "停下这条命令？会告诉智能体是你停的。",
+  withdrawSentinel: "撤掉",
+  withdrawSentinelAsk: "撤掉这个哨兵？",
+  sentinelPhase: (phase) =>
+    ({ starting: "刚开始", watching: "盯着", satisfied: "已成立", unable: "盯不成", withdrawn: "已撤掉", unavailable: "暂时问不到" })[phase],
   notStopped: "没能停下",
   cancel: "取消",
   jobOutput: (command) => `${command} 的输出`,
@@ -877,12 +871,9 @@ export const en: Words = {
   },
   openColleague: "Open",
   agents: {
-    title: "Agents",
-    running: (n) => `${n} working`,
     failed: "failed",
     stopped: "stopped",
     waiting: "waiting",
-    asked: "Task",
     more: "Show all",
     less: "Show less",
     reading: "Reading…",
@@ -892,12 +883,14 @@ export const en: Words = {
     failedTold: (task) => (task ? `Agent failed: ${task}` : "Agent failed"),
     stoppedTold: (task) => (task ? `Agent stopped: ${task}` : "Agent stopped"),
     tools: (n) => (n === 1 ? "1 tool call" : `${n} tool calls`),
-    goTo: "Go to it",
-    now: "now",
     unknownAgents: (n) => (n === 1 ? "1 agent" : `${n} agents`),
   },
-  stillRunning: "Running commands",
+  stillRunning: "Still under way",
   stopJobAsk: "Stop this command? The agent will be told you stopped it.",
+  withdrawSentinel: "Withdraw",
+  withdrawSentinelAsk: "Withdraw this sentinel?",
+  sentinelPhase: (phase) =>
+    ({ starting: "starting", watching: "watching", satisfied: "found it", unable: "can't watch", withdrawn: "withdrawn", unavailable: "can't be asked now" })[phase],
   notStopped: "Couldn't stop it",
   cancel: "Cancel",
   jobOutput: (command) => `Output of ${command}`,

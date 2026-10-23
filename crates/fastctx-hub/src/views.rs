@@ -57,6 +57,7 @@ pub(crate) fn view_for(
     // administrator's own included.
     for account in &mut directory.accounts {
         if !mine.contains(&account.name) {
+            account.collab = None;
             account.profile = account.profile.as_ref().map(|profile| profile.located(|machine| all.same(machine, me)));
         }
     }
@@ -130,6 +131,9 @@ pub(crate) fn view_for(
         })
         .collect();
     View {
+        ledger_parts: true,
+        project_memory: true,
+        collaboration_tree: true,
         call_details: true,
         machine_log: true,
         hub: store.hub.id.clone(),
@@ -154,6 +158,10 @@ pub(crate) fn view_for(
         lan_relays: true,
         paced_intake: true,
         profiles: true,
+        account_records: true,
+        conversation_plans: true,
+        goal_control: true,
+        scratch_locations: true,
         subagents: true,
         versions: true,
         package_progress: true,
