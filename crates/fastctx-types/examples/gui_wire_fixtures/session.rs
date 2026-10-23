@@ -449,6 +449,10 @@ pub fn fixtures() -> Fixtures {
             end: TurnEnd {
                 facts: match i {
                     0 => Some(Box::new(TurnFacts {
+                        world_started_at: None,
+                        world_last_activity_at: None,
+                        world_progress: false,
+                        world_compacted: false,
                         models: vec![],
                         efforts: vec![],
                         tokens: Some(TurnTokens::Codex {
@@ -472,6 +476,10 @@ pub fn fixtures() -> Fixtures {
                         }),
                     })),
                     1 => Some(Box::new(TurnFacts {
+                        world_started_at: None,
+                        world_last_activity_at: None,
+                        world_progress: false,
+                        world_compacted: false,
                         models: vec!["response-model-a".into(), "response-model-b".into()],
                         efforts: vec![
                             TurnEffort::Requested { value: json!("low") },

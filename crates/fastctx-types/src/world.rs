@@ -24,6 +24,11 @@ impl crate::tolerant::Tolerant for Form {
 /// it (`world-run.md`, 路径与各个系统的不同).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineFacts {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub goal_runtime: bool,
+    /// Reports a requester's pending inputs, running turns and undelivered answers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub turn_debts: bool,
     pub name: MachineName,
     /// `windows`, `linux` or `macos`.
     pub os: String,
@@ -39,6 +44,12 @@ pub struct MachineFacts {
     /// Accepts confirmed end delivery separately from CLI consumption.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub completion_receipts: bool,
+    /// Understands sentinel account settings and lifecycle calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sentinels: bool,
+    /// Preserves internal observation identity through on and its supervisor.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sentinel_look: bool,
     /// Keeps what arrived of a shared-input upload that broke, and takes it
     /// up again from there (`RemoteCall::Upload::resumes`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -62,6 +73,12 @@ pub struct MachineFacts {
     /// Answers attachment destination queries before receiving any file bytes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub attachment_places: bool,
+    /// Answers an account's replica-directory query without returning bodies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub memory_folders: bool,
+    /// Reads collaboration trees, including native child-agent histories.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collaboration_tree: bool,
     /// The bash `run` uses there, such as `bash 5.2.37 (Git for Windows,
     /// MSYS)`: on MSYS, arguments shaped like Unix paths are rewritten
     /// before a Windows program sees them (`world-run.md`). Empty when the

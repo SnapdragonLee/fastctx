@@ -25,6 +25,12 @@ pub struct Host {
 /// What a session knows about itself that lets the World recognise it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hints {
+    /// The native Codex login that owns the thread's persisted history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<std::path::PathBuf>,
+    /// OS lifetime of the native host that started this adapter, reported locally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_process: Option<crate::ProcessIdentity>,
     /// Set by the World when it started the session itself.
     pub resident: Option<ResidentId>,
     /// The thread a Codex call belongs to; one thread is one resident,
@@ -61,6 +67,10 @@ pub struct About {
     /// through its calls of the World's tools.
     #[serde(default)]
     pub world_started: bool,
+    /// A native Codex thread the World resumed for a requested background event.
+    /// Birth provenance remains unchanged in world_started and origin.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_resumed: bool,
     /// The model, as the host told the World; `None` when it did not.
     #[serde(default)]
     pub model: Option<String>,
@@ -113,6 +123,8 @@ pub struct LastLines {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Notice {
+    /// A requested observation, allowed to resume the owner's closed session.
+    Sentinel { observation: Box<crate::sentinel_notice::SentinelNotice> },
     /// A job the resident started, which went on in the background, ended.
     JobEnded {
         /// A wait took this end; this is a receipt, never a session notification.
@@ -140,6 +152,9 @@ pub enum Notice {
         /// Who stopped it and why, when someone did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stop: Option<Box<crate::run::StopRequest>>,
+        /// Coordinates learned after the initial run answer, including nested hops.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        scratch: Vec<crate::scratch::Location>,
     },
     /// A turn of a colleague ended, which the resident's words went into or
     /// which it asked for: its last message, verbatim.
@@ -156,6 +171,11 @@ pub enum Notice {
 }
 
 impl Notice {
+    /// Explicitly scheduled work resumes even a closed foreground conversation.
+    pub fn wakes_closed(&self) -> bool {
+        matches!(self, Self::Words { from: Speaker::World, .. } | Self::Sentinel { .. })
+    }
+
     /// What the World tells when the user changes a conversation's machines
     /// and folders, or its project: it starts no turn, but goes in with the
     /// next one, or into the one running where it next can; told again
@@ -233,6 +253,9 @@ pub struct Now {
     pub since: Timestamp,
     /// The turn running now, as its host named it.
     pub turn: Option<String>,
+    /// The latest settled turn; late settlement of an older turn cannot replace it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn: Option<String>,
     /// For each turn running, whose words went into it: each is owed its
     /// end. Once a turn ends, its answers wait in the `outbox` until each
     /// reader's machine has its own.
@@ -383,7 +406,13 @@ pub struct MessageLine {
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum MessageKind {
     /// The request it was born with.
-    Asked { from: Address, text: String },
+    Asked {
+        from: Address,
+        text: String,
+        /// The requester's initiating turn, not the colleague's first turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requester_turn: Option<String>,
+    },
     /// Words that went into one of its turns.
     Heard { from: Speaker, turn: Option<String>, text: String },
     /// A turn ended, owed to `owed`.
@@ -429,6 +458,9 @@ pub struct Seen {
 /// One thing the World saw a resident do: one line of its `actions`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
+    /// The initiating conversation turn, captured before the work starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<String>,
     pub at: Timestamp,
     /// Where it happened, which may be another machine than the resident's.
     pub machine: MachineName,
@@ -565,4 +597,9 @@ pub struct Owing {
 pub struct Whereabouts {
     pub resident: ResidentId,
     pub town: Option<TownName>,
+}
+
+impl About {
+    /// Whether the World retains a restoration contract for this host session.
+    pub fn world_managed(&self) -> bool { self.world_started || self.native_resumed }
 }

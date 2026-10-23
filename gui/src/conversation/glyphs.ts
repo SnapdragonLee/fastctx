@@ -12,13 +12,16 @@ type Named = Glyph | "thinking" | "chevron" | "copy" | "check" | "expand" | "sto
  *  password, a phone, logging out, trust and a relay; locking a person out
  *  and letting them in, signing up; a conversation's context, the
  *  provider's cache and how long it stays; saving a copy, and a file's
- *  path; the machines as a drawing and as a list; a new version. */
+ *  path; the machines as a drawing and as a list; a new version; a
+ *  conversation's goal, pausing and resuming it, and the panel beside it;
+ *  a repair; a project's journal and decision; a sentinel. */
 type Frame =
   | "menu" | "plus" | "minus" | "settings" | "sidebar" | "machine" | "close" | "more" | "back" | "sleep" | "wake" | "move"
   | "archive" | "unarchive" | "trash" | "reread" | "scan" | "grip" | "page" | "versions" | "history" | "person" | "key" | "phone"
   | "logout" | "shield" | "lock" | "unlock" | "signup" | "relay" | "save" | "link"
   | "context" | "cache" | "clock" | "tree" | "rows" | "update"
   | "note" | "plug" | "tune"
+  | "goal" | "pause" | "resume" | "panel" | "repair" | "journal" | "spec" | "sentinel"
   | Marks;
 
 /** Which agent and which kind of device, drawn small beside a conversation's
@@ -111,6 +114,20 @@ const paths: Record<Named, string> = {
   note: '<path d="M5.25 3.75h6.25l3.25 3.25v9.25h-9.5z"/><path d="M11.5 3.75V7h3.25"/><path d="M7.75 10.25h4.5M7.75 13h3"/>',
   /* A plug on its cord: an MCP server. */
   plug: '<path d="M7.75 3.75V6.5M12.25 3.75V6.5"/><path d="M5.75 6.5h8.5v2.25a4.25 4.25 0 0 1-8.5 0z"/><path d="M10 13v3.25"/>',
+  /* A pennant on its staff: a goal the conversation keeps working at. */
+  goal: '<path d="M6 16.25V3.75"/><path d="M6 4.5h8.5l-2 3.25 2 3.25H6"/>',
+  pause: '<path d="M7.5 5.5v9M12.5 5.5v9"/>',
+  resume: '<path d="M7 5.1v9.8l7.6-4.9z"/>',
+  /* An eye kept open: a sentinel watching for something. */
+  sentinel: '<path d="M2.9 10c1.7-3 4.1-4.75 7.1-4.75s5.4 1.75 7.1 4.75c-1.7 3-4.1 4.75-7.1 4.75S4.6 13 2.9 10z"/><circle cx="10" cy="10" r="2.1"/>',
+  /* A notebook laid open: a journal of a project, written once. */
+  journal: '<path d="M10 5.4C8.5 4.4 6.5 4 4 4.25v10.5c2.5-.25 4.5.15 6 1.15 1.5-1 3.5-1.4 6-1.15V4.25c-2.5-.25-4.5.15-6 1.15z"/><path d="M10 5.4v10.5"/>',
+  /* A sheet with a seal at its foot: a decision, kept in its versions. */
+  spec: '<path d="M5.25 3.75h9.5v8.5"/><path d="M5.25 3.75v12.5h5.5"/><path d="M7.75 7.25h4.5M7.75 9.75h4.5"/><circle cx="13.75" cy="15" r="1.9"/>',
+  /* A wrench: a machine's Fastctx mended layer by layer. */
+  repair: '<path d="M13.2 3.9a3.5 3.5 0 0 0-4.4 4.4l-5 5a1.35 1.35 0 0 0 1.9 1.9l5-5a3.5 3.5 0 0 0 4.4-4.4l-2.1 2.1-1.8-.1-.1-1.8z"/>',
+  /* A window with a leaf at its right: the panel beside a conversation. */
+  panel: '<rect x="3.75" y="4.75" width="12.5" height="10.5" rx="1.5"/><path d="M11.75 4.75v10.5"/>',
   /* Two sliders: preferences. */
   tune: '<path d="M3.75 6.75h6.5M14.75 6.75h1.5M3.75 13.25h1.5M9.75 13.25h6.5"/><circle cx="12.5" cy="6.75" r="2"/><circle cx="7.5" cy="13.25" r="2"/>',
   // A cylinder: what the provider keeps of the prompt.

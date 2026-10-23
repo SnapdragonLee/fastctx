@@ -41,6 +41,7 @@ const FASTCTX = __FASTCTX_COMMAND__
 // How soon what failed is tried again, and how long an answer to whether
 // fastctx is being removed is kept.
 const LOOK_MS = __FASTCTX_LOOK_MS__
+
 // Claude Code limits each fs read/write to 4 MiB of UTF-8.
 const FILE_BYTES = 4 * 1024 * 1024
 // How long a session whose start failed waits before an event tries again.
@@ -72,6 +73,7 @@ async function removed($, fresh = false) {
 
 __FASTCTX_CONTROLS__
 __FASTCTX_COMMANDS__
+__FASTCTX_NATIVE_GOAL__
 __FASTCTX_ASSISTED__
 __FASTCTX_ACCOUNT_AGENTS__
 __FASTCTX_SELECTION__
@@ -79,6 +81,8 @@ __FASTCTX_REWIND__
 __FASTCTX_OBSERVATIONS__
 __FASTCTX_USAGE__
 __FASTCTX_FAILURES__
+__FASTCTX_TURN_FAILURES__
+__FASTCTX_GOAL__
 
 // /clear may replace even the same session ID. Keep the old object alive for
 // its timers, queued writes and late turn/tool results; never reset it in place.
@@ -182,7 +186,12 @@ function event($, context, kind, fields) {
   const { id: name, at } = reserved(context)
   const pending = [...context.unwritten.keys()].map((name) => name + '.json')
   const body = JSON.stringify({ kind, at, ...fields, pending })
-  context.unwritten.set(name, { body })
+  const goalStop = kind === 'turn_complete' && fields.aborted === true && context.goal?.active === true
+  if (goalStop) {
+    context.goalStopping = true
+    context.goalStopReport = name + '.json'
+  }
+  context.unwritten.set(name, { body, goalStop })
   const written = context.writing.then(() => writePending($, context, name))
   // A failed report fails its caller; it never counts as an acknowledgment.
   context.writing = written.catch(() => {
@@ -199,6 +208,7 @@ async function writePending($, context, name) {
   // same millisecond (or a clock rollback) cannot reuse fragment timestamps.
   if (report.sequence !== undefined) await $.fs.write(context.dir + '/applied/' + report.sequence + '.sequence', '')
   const path = context.dir + '/events/' + name
+  if (report.goalStop) await $.fs.write(context.dir + '/goal-stop.json', JSON.stringify({ report: name + '.json' }))
   await writeReport($, path, report.body)
   await $.fs.write(path + '.done', '')
   context.unwritten.delete(name)
@@ -310,6 +320,7 @@ async function submit($, context, deliveries, prompt) {
   if (context.closed || context.submitting.length > 0 || context.accepted.length > 0) return false
   context.submitting.push(...deliveries)
   try {
+    if (!(await goalPermitsAll($, context, deliveries))) return false
     if ((await $.session.id()) !== context.sessionId) return false
     for (const delivery of deliveries) {
       await $.fs.write(context.dir + '/attempts/' + delivery.id, JSON.stringify({ at: stamp(), turn: context.turn, state: 'submitting' }))
@@ -318,6 +329,10 @@ async function submit($, context, deliveries, prompt) {
     // starts it: this plugin's own prompt reaches none of its own hooks.
     await accountAgentsBeforeSubmit($, context)
     await alongBefore($, context)
+    if (!(await goalPermitsAll($, context, deliveries))) {
+      for (const delivery of deliveries) await $.fs.write(context.dir + '/attempts/' + delivery.id, JSON.stringify({ state: 'refused' }))
+      return false
+    }
     // Its row and turn can come before the call answers.
     context.accepted.push(deliveries)
     let refusal = null
@@ -359,12 +374,14 @@ async function submitted($, context, deliveries, acceptedTurn) {
 // held again, before anything held since.
 async function flush($, context, how) {
   if (context.closed || context.busy || waiting(context)) return
+  await readGoal($, context)
+  if (context.closed || context.busy || waiting(context)) return
   // What rides with the next turn starts none: it waits for one.
-  const at = context.held.findIndex((delivery) => delivery.along === undefined)
+  const at = context.held.findIndex((delivery) => delivery.along === undefined && goalPermits(context, delivery))
   if (at < 0) return
   const deliveries = context.held.splice(at, 1)
   if (deliveries[0].as_user !== true) {
-    while (at < context.held.length && context.held[at].as_user !== true && context.held[at].along === undefined) deliveries.push(...context.held.splice(at, 1))
+    while (at < context.held.length && context.held[at].as_user !== true && context.held[at].along === undefined && goalPermits(context, context.held[at])) deliveries.push(...context.held.splice(at, 1))
   }
   const prompt = deliveries[0].as_user === true
     ? { text: deliveries[0].text, asUser: true }
@@ -389,7 +406,7 @@ const STOPPED = 'The user stopped your previous turn on purpose. A tool call it 
 // stopped the last turn, and what is held to go along. Taken as it is read;
 // `keep` puts back what did not go in.
 function alongNext(context) {
-  const along = context.held.filter((delivery) => delivery.along !== undefined)
+  const along = context.held.filter((delivery) => delivery.along !== undefined && goalPermits(context, delivery))
   for (const delivery of along) context.held.splice(context.held.indexOf(delivery), 1)
   const stopped = context.toldStopped
   context.toldStopped = false
@@ -405,6 +422,7 @@ function alongNext(context) {
 // before a prompt this plugin submits; the turn that prompt starts takes it
 // (`startTurn`), and the model reads both in the one request.
 async function alongBefore($, context) {
+  await readGoal($, context)
   const { along, texts, keep } = alongNext(context)
   if (texts.length === 0) return
   let appended
@@ -427,6 +445,7 @@ async function alongBefore($, context) {
 async function alongPrompt($, context, e, next) {
   if (e.turnId !== undefined || e.command !== undefined || context.closed) return next(e)
   await refreshAccountAgents($, context)
+  await readGoal($, context)
   const { along, texts, keep } = alongNext(context)
   if (texts.length === 0) return next(e)
   let result
@@ -564,6 +583,7 @@ async function staleTurn($, context, turn) {
 
 async function looked($, context) {
   await settle($, context)
+  await readGoal($, context)
   // What has a receipt was handed over already, perhaps before this mod
   // loaded again. Without knowing which, anything handed over could repeat.
   const receipts = await listing($, context, 'receipts')
@@ -628,7 +648,7 @@ async function looked($, context) {
     if (older.length > 0) await replaced($, context, older)
     // What rides with the next turn starts none: it waits for one, or goes
     // into the one running at its next tool boundary.
-    if (context.busy || waiting(context) || delivery.along !== undefined) {
+    if (context.busy || waiting(context) || delivery.along !== undefined || !goalPermits(context, delivery)) {
       context.held.push(delivery)
       context.handled.add(name)
       continue
@@ -788,6 +808,7 @@ async function startTurn($, context, e, next) {
   await startControlTurn($, e)
   context.busy = true
   context.turn = e.turnId
+  noteTurnPrompt(context, e)
   // The session's cost total as the turn begins: what it has risen by at
   // the turn's end is what the turn cost (`completeTurn`).
   const usage = await sessionUsage($)
@@ -825,6 +846,7 @@ async function completeTurn($, context, e, next) {
     await observeAgents($, context)
     return next(e)
   }
+  await readGoal($, context)
   await context.shown.end(reports($, context), e.turnId)
   // The session's figures as the turn ends reach the node ahead of the end
   // itself, so its ledger and the account's windows stand as the turn left
@@ -841,6 +863,7 @@ async function completeTurn($, context, e, next) {
     aborted: e.isAborted,
     reason: e.reason,
     refusal: e.reason === 'refusal' ? e.refusal : null,
+    error: completedFailure(context, e),
     ms: e.durationMs,
     answer: e.answer ?? null,
     streamed: true,
@@ -858,11 +881,12 @@ async function boundary($, context, e, next) {
   const result = await next(e)
   if (context.closed || (await $.session.id()) !== context.sessionId) return result
   if (await stopping($, context)) return result
+  await readGoal($, context)
   const acceptedTurn = context.turn
   if (!context.busy || acceptedTurn === null) return result
   // Whatever waits goes in beside this result: the World's telling, and
   // the user's words sent while the turn runs (`world-colleagues.md`).
-  const deliveries = [...context.held]
+  const deliveries = context.held.filter((delivery) => goalPermits(context, delivery))
   if (deliveries.length === 0) return result
   const selected = new Set(deliveries)
   for (let i = context.held.length - 1; i >= 0; i--) if (selected.has(context.held[i])) context.held.splice(i, 1)
@@ -873,6 +897,11 @@ async function boundary($, context, e, next) {
     // deliveries; only an uncertain host append must not be replayed.
     context.held.unshift(...deliveries)
     throw error
+  }
+  if (!(await goalPermitsAll($, context, deliveries)) || !context.busy || context.turn !== acceptedTurn) {
+    for (const delivery of deliveries) await $.fs.write(context.dir + '/attempts/' + delivery.id, JSON.stringify({ state: 'refused' }))
+    context.held.unshift(...deliveries)
+    return result
   }
   try {
     context.appending = true
@@ -938,34 +967,29 @@ async function transcript($, context, path) {
   }
 }
 
-// The machines and folders the user pointed a conversation the World opened
-// at, as the node keeps them in the session's directory: a block of the
-// context the first message carries, beside the instruction files, read
-// again whenever Claude Code reads that context again, as after compacting
-// the conversation. None where the node keeps none.
-const FOCUS_BLOCK = 'machinesAndFolders'
-
-// The record of the project the conversation works in, the user's
-// instructions for all work in it first, as the node keeps it in the
-// session's directory, up to date: read into the context the same way.
-// None where it works in no project.
-const USER_BLOCK = 'userInstructions'
-const PROJECT_BLOCK = 'projectRecord'
-// How the account wants its subagents used, as it was last read with them
-// (`refreshAccountAgents`).
+// Named context is read afresh on every prompt rebuild, including compaction.
 const SUBAGENT_BLOCK = 'subagentInstructions'
+const CONTEXT_PREFIX = 'fastctx:'
+const OLD_CONTEXT_NAMES = ['machinesAndFolders', 'userInstructions', 'projectRecord', SUBAGENT_BLOCK]
 
-async function blockText($, context, name) {
-  try {
-    const text = await $.fs.read(context.dir + '/' + name)
-    return text.trim() === '' ? null : text
-  } catch (error) {
-    return null
+async function contextBlocks($, context) {
+  const pointer = JSON.parse(await $.fs.read(context.dir + '/context.json'))
+  const state = JSON.parse(await $.fs.read(pointer.state))
+  const entries = (await $.fs.list(pointer.directory)).filter((entry) => /^[a-z0-9-]{1,32}\.json$/.test(entry.name))
+  const blocks = []
+  const receipt = { epoch: state.epoch, revisions: {}, versions: {} }
+  const order = ['user.json', 'project.json', 'focus.json', 'plan.json', 'goal.json', 'map.json']
+  const rank = (entry) => order.includes(entry.name) ? order.indexOf(entry.name) : order.length
+  entries.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+  for (const entry of entries) {
+    const block = JSON.parse(await $.fs.read(pointer.directory + '/' + entry.name))
+    const name = entry.name.slice(0, -5)
+    receipt.revisions[name] = block.revision
+    receipt.versions[name] = block.version
+    if (block.text !== '') blocks.push({ name: CONTEXT_PREFIX + name, text: block.text })
   }
-}
-
-async function focus($, context) {
-  return blockText($, context, 'focus.md')
+  await $.fs.write(context.dir + '/context-heard.json', JSON.stringify(receipt))
+  return blocks
 }
 
 async function session($, registry, id, renew = false) {
@@ -1037,6 +1061,7 @@ export function register(on) {
     await refreshAccountAgents($, context)
     context.heardAccountAgents = context.accountAgentRevision
     await startControls($)
+    scheduleNativeGoalClear($, context)
     return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'session.start', e, next))
   on('agent.offer', async ($, e, next) => {
@@ -1052,7 +1077,10 @@ export function register(on) {
   }).catch(($, e, next) => continueWithoutWorld($, 'turn.start', e, next))
   on('turn.complete', async ($, e, next) => {
     if (await removed($)) return next(e)
-    return completeTurn($, await route($, registry, 'turn.complete', e), e, next)
+    const context = await route($, registry, 'turn.complete', e)
+    const result = await completeTurn($, context, e, next)
+    await clearNativeGoal($, context)
+    return result
   }).catch(($, e, next) => continueWithoutWorld($, 'turn.complete', e, next))
   on('turn.step', async function* ($, e, next) {
     if (await removed($)) {
@@ -1144,15 +1172,13 @@ export function register(on) {
     const result = await next(e)
     const context = await session($, registry, await $.session.id())
     context.heardAccountAgents = context.accountAgentRevision
-    const added = [
-      { name: FOCUS_BLOCK, text: await focus($, context) },
-      { name: USER_BLOCK, text: await blockText($, context, 'user.md') },
-      { name: SUBAGENT_BLOCK, text: context.subagentInstructions || null },
-      { name: PROJECT_BLOCK, text: await blockText($, context, 'project.md') },
-    ].filter((block) => block.text !== null)
-    if (!added.length) return result
-    const names = added.map((block) => block.name)
-    return { ...result, blocks: [...result.blocks.filter((block) => !names.includes(block.name)), ...added] }
+    const added = await contextBlocks($, context)
+    if (context.subagentInstructions) {
+      const at = added.findIndex((block) => block.name === CONTEXT_PREFIX + 'user')
+      added.splice(at < 0 ? 0 : at + 1, 0, { name: SUBAGENT_BLOCK, text: context.subagentInstructions })
+    }
+    return { ...result, blocks: [...result.blocks.filter((block) =>
+      !block.name.startsWith(CONTEXT_PREFIX) && !OLD_CONTEXT_NAMES.includes(block.name)), ...added] }
   }).catch(($, e, next) => continueWithoutWorld($, 'prompt.context', e, next))
   on('prompt.section', async ($, e, next) => {
     if (await removed($)) return next(e)
@@ -1177,6 +1203,8 @@ export function register(on) {
     return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'classic.Elicitation', e, next))
   on('command.run', async ($, e, next) => {
+    if (await removed($)) return next(e)
+    if (e.command === 'goal') return internalGoalClear($, e) ? next(e) : { text: NATIVE_GOAL_DISABLED, exitCode: 1 }
     if (await assistedCommand($, e.command)) return { text: assistedCommandReason, exitCode: 1 }
     if (e.command === 'model' && await assistedSession($)) {
       const result = await controlSelection($, await controlBegin($, sessions), e.args.trim(), null)
@@ -1186,8 +1214,8 @@ export function register(on) {
   }).catch(() => ({ text: 'Fastctx could not verify the assisted conversation command policy.', exitCode: 1 }))
   on('command.describe', async ($, e, next) => {
     const result = await next(e)
-    if (await assistedCommand($, e.command)) return { ...result, isHidden: true }
     if (await removed($)) return result
+    if (e.command === 'goal' || await assistedCommand($, e.command)) return { ...result, isHidden: true }
     const id = await $.session.id()
     if (!commandDescriptions.has(id)) commandDescriptions.set(id, new Map())
     const descriptions = commandDescriptions.get(id)
@@ -1230,9 +1258,19 @@ export function register(on) {
   }).catch(($, e, next) => continueWithoutWorld($, 'classic.SubagentStop', e, next))
   on('classic.UserPromptSubmit', async ($, e, next) => {
     if (await removed($)) return next(e)
-    await observeTitle($, await session($, registry, await $.session.id()), e)
+    const context = await session($, registry, await $.session.id())
+    notePrompt(context, e)
+    await observeTitle($, context, e)
     return next(e)
   }).catch(($, e, next) => continueWithoutWorld($, 'classic.UserPromptSubmit', e, next))
+  on('classic.StopFailure', async ($, e, next) => {
+    // Capture identity before the first await; a new turn may start while the report is written.
+    const failure = captureStopFailure(registry.sessions.get(e.session_id), e)
+    if (await removed($)) return next(e)
+    const context = await session($, registry, e.session_id)
+    await reportTurnFailure($, context, failure)
+    return next(e)
+  }).catch(($, e, next) => continueWithoutWorld($, 'classic.StopFailure', e, next))
   on('session.measure', async ($, e, next) => {
     if (await removed($)) return next(e)
     const context = await route($, registry, 'session.measure', e)
