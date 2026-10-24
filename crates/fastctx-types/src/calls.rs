@@ -20,6 +20,68 @@ use crate::{Address, AgentName, EntryId, JobId, JournalName, MachineName, Notice
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "call")]
 pub enum Call {
+    Plan {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        operation: crate::plan::Operation,
+    },
+    PlanRead {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        owner: ResidentId,
+    },
+    PlanWrite {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        owner: ResidentId,
+        expected: Option<u64>,
+        markdown: String,
+    },
+    AccountRecords {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        request: crate::account_records::Request,
+    },
+    WatchAccountRecords {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        kind: String,
+    },
+    Collaboration {
+        resident: ResidentId,
+        machine: Option<crate::access::Written>,
+    },
+    Memory(crate::memory::MemoryCall),
+    WatchMemory {
+        town: TownName,
+    },
+    MemorySettings {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        enabled: Option<bool>,
+    },
+    Goal { resident: ResidentId, machine: Option<crate::access::Written>, account: Option<crate::access::HubAccount>, request: crate::goals::Request },
+    GoalCommand { hub: Option<crate::HubName>, account: Option<crate::AccountName>, job: Option<crate::JobId>, request: crate::goals::AgentRequest },
+    Timer { timer: crate::timers::TimerCall },
+    TurnEvidence { resident: ResidentId, turn: Option<String>, refresh_limits: bool },
+    CompactBetweenTurns { resident: ResidentId },
+    Sentinel {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        request: crate::sentinel_control::Request,
+    },
+    SentinelSettings {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        change: Option<crate::sentinel_settings::WriteSettings>,
+    },
+    /// Hands one sentinel key to the account's sentinel home; `None` removes it.
+    SentinelKey {
+        hub: Option<crate::HubName>,
+        account: Option<crate::AccountName>,
+        key: crate::sentinel_settings::KeyName,
+        value: Option<crate::sentinel_settings::Secret>,
+    },
     /// The selected account's machine changes, before a previous page's
     /// cursor when supplied. The hub checks visibility on every read.
     MachineLog {
@@ -288,6 +350,19 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         login: Option<crate::collab::Caller>,
     },
+    /// Tells what one of the World's own commands did, from inside the job
+    /// whose script gave it (`run_facts::RunStep`); the node names the job's
+    /// machine. Older nodes do not know it, and the command goes on.
+    Stepped {
+        job: crate::JobId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        town: Option<crate::TownName>,
+        id: String,
+        began: jiff::Timestamp,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ended: Option<jiff::Timestamp>,
+        did: crate::run_facts::StepDid,
+    },
     /// Records what a resident saw of files on this machine through
     /// `fastctx view`; the resident may live on another machine.
     Saw {
@@ -456,6 +531,8 @@ pub enum Call {
     /// and then each event as it happens, for as long as the connection
     /// stays open.
     Watch {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal: Option<crate::access::HubAccount>,
         resident: ResidentId,
         machine: Option<Written>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -704,6 +781,9 @@ pub enum Call {
     /// is on more than one hub; for `resident`, the session's resident when
     /// it is known, also the collaboration its accounts offer it.
     Machines {
+        /// The adapter renders and retains the per-conversation scratch paths.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        scratch: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resident: Option<ResidentId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -716,6 +796,21 @@ pub enum Call {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "reply")]
 pub enum Reply {
+    Plan {
+        result: crate::plan::Result,
+    },
+    AccountRecords {
+        response: crate::account_records::Response,
+    },
+    Collaboration(Box<crate::collaboration::Tree>),
+    Memory(crate::memory::MemoryReply),
+    MemorySettings(crate::memory::Settings),
+    Goal { updated: Box<crate::goals::Updated> },
+    Timers { timers: Vec<crate::timers::Timer> },
+    TurnEvidence { evidence: Box<crate::turn_evidence::TurnEvidence>, text: String },
+    Compacted { result: crate::turn_evidence::Compacted },
+    Sentinel(Box<crate::sentinel_control::Reply>),
+    SentinelSettings(Box<crate::sentinel_settings::SettingsReply>),
     /// The HTTP proxy chosen in Fastctx, if one is (`Call::HubProxy`).
     HubProxy {
         url: Option<String>,
@@ -842,6 +937,9 @@ pub enum Reply {
     Notices {
         notices: Vec<Delivery>,
         notes: Vec<String>,
+        /// Notes before this index precede command output; the rest follow it.
+        #[serde(default)]
+        leading_notes: usize,
     },
     Who(WorldWho),
     Since(crate::since::WorldSince),
@@ -920,6 +1018,8 @@ pub enum Reply {
         groups: Vec<crate::world::MachineGroup>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         collab: Option<crate::collab::Offered>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        scratch: crate::scratch::Descriptions,
     },
     /// A job stopped, or found already ended: on `machine`, as its record
     /// now stands.

@@ -135,6 +135,27 @@ pub fn target(directory: &ConversationDir, id: &NoticeId, session: &str) -> io::
 /// Everything on its way into the resident's session, oldest first.
 pub fn pending(directory: &ConversationDir) -> io::Result<Vec<Pending>> {
     let _transaction = crate::resident_storage::lock();
+    pending_here(directory)
+}
+
+/// Reads both input states atomically: reconciliation can move uncertain words back to pending.
+pub(crate) fn input_states(directory: &ConversationDir) -> io::Result<(Vec<Pending>, Vec<Pending>)> {
+    let _transaction = crate::resident_storage::lock();
+    let pending = pending_here(directory)?;
+    let mut uncertain = Vec::new();
+    for path in entries(&directory.uncertain())? {
+        if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'))
+            || path.extension().is_none_or(|extension| extension != "json")
+        {
+            continue;
+        }
+        uncertain.push(serde_json::from_slice(&std::fs::read(path)?)?);
+    }
+    Ok((pending, uncertain))
+}
+
+/// The caller holds the resident-storage transaction.
+pub(crate) fn pending_here(directory: &ConversationDir) -> io::Result<Vec<Pending>> {
     let mut all = Vec::new();
     for path in entries(&directory.inbox())? {
         // A file being written sits under a hidden temporary name until it
@@ -339,10 +360,13 @@ fn parse_pending(directory: &ConversationDir, path: &Path, bytes: &[u8]) -> io::
     // Before durable handovers the inbox contained Delivery directly.
     let delivery: fastctx_types::residents::Delivery = serde_json::from_value(value).map_err(io::Error::other)?;
     let (readers, working) = match &delivery.notice {
+        Notice::Question { .. }
+        | Notice::Words { goal_report: Some(_), .. }
+        | Notice::Words { goal_question: Some(_), .. } => (Vec::new(), false),
         Notice::Words { from: fastctx_types::session::Speaker::Resident { address }, .. } => {
             (vec![address.clone()], false)
         }
-        Notice::Words { from: fastctx_types::session::Speaker::User { .. }, .. } => (Vec::new(), false),
+        Notice::Words { from: fastctx_types::session::Speaker::User { .. }, .. } | Notice::Sentinel { .. } => (Vec::new(), false),
         _ => (Vec::new(), true),
     };
     let about: fastctx_types::residents::About = parse(&directory.about(), &std::fs::read(directory.about())?)?;
@@ -373,6 +397,10 @@ pub fn owe_job(record_path: &Path) -> io::Result<JobRecord> {
 /// Tells the resident that started the job of `record` that it ended, if it
 /// has and the resident is owed that word.
 pub async fn tell_if_ended(node: &Arc<Node>, record_path: &Path, record: &JobRecord) -> io::Result<()> {
+    if record.is_sentinel() {
+        if record.end.is_none() { crate::job_watch::restore(node,record_path,record)?; }
+        return Ok(());
+    }
     let Some(owner) = record.owner.resident() else { return Ok(()) };
     let Some(end) = &record.end else {
         crate::job_watch::restore(node, record_path, record)?;
@@ -450,6 +478,7 @@ pub async fn tell_if_ended(node: &Arc<Node>, record_path: &Path, record: &JobRec
                 record.stderr.as_deref().map(Path::new),
             )?,
             stop: record.stop.as_ref().map(|stop| Box::new(stop.request.clone())),
+            scratch: crate::scratch::jobs::locations(record_path, &record.machine)?,
         };
         match publish_new(&notice_path, &json(&notice)?, Permissions::Private) {
             Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
