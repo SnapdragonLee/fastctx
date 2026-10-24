@@ -277,6 +277,7 @@ impl Call {
             | Self::Folders { .. }
             | Self::Stats { .. }
             | Self::WatchTools { .. }
+            | Self::HoldHost { .. }
             | Self::Who { .. }
             | Self::Since { .. }
             | Self::Agents { .. }

@@ -692,15 +692,26 @@ fn kept(node: &Node, resident: &ResidentId) -> Vec<fastctx_types::session::KeptW
     use fastctx_types::residents::PendingState;
     use fastctx_types::session::{KeptWords, WordsState};
     let directory = node.world.conversation(resident);
+    let managed = node.residents.about(resident).is_some_and(|(about, _)| about.world_started);
     let Ok(pending) = crate::inbox::pending(&directory) else { return Vec::new() };
     pending
         .into_iter()
-        .map(|pending| KeptWords {
-            id: pending.delivery.id,
-            state: match pending.state {
-                PendingState::Waiting => WordsState::Waiting,
-                PendingState::Sending | PendingState::Handed | PendingState::Waking => WordsState::Handing,
-            },
+        .map(|pending| {
+            let progress = crate::lifecycle::retry::progress(node, resident, &pending.delivery.id).ok().flatten();
+            let retrying = progress.is_some();
+            let host_retry = progress
+                .filter(|progress| Timestamp::now().as_second().saturating_sub(progress.began.as_second()) >= 60)
+                .and_then(|progress| {
+                    progress.reason.map(|reason| fastctx_types::session::HostRetry { since: progress.began, reason })
+                });
+            KeptWords {
+                id: pending.delivery.id,
+                state: match pending.state {
+                    PendingState::Waiting if !retrying && !managed => WordsState::Waiting,
+                    _ => WordsState::Handing,
+                },
+                host_retry,
+            }
         })
         .collect()
 }
@@ -957,11 +968,19 @@ pub async fn stop_here(node: &Arc<Node>, resident: &ResidentId) -> Result<bool, 
         .filter(|pending| pending.delivery.notice.along().is_none())
         .map(|pending| pending.delivery.id)
         .collect();
-    if node.stops.coming(node, resident, coming) {
+    if node.stops.coming(node, resident, coming).map_err(|error| Failure::new(error.to_string()))? {
         return Ok(true);
     }
     match (about.host.agent.as_str(), about.world_started, &about.session) {
-        ("codex", true, Some(thread)) => node.codex.of(node, &about)?.interrupt(thread).await.map_err(Failure::new),
+        ("codex", true, Some(thread)) => {
+            let host = node.codex.of(node, &about)?;
+            if let Some(turn) = host.running_turn(thread) {
+                crate::stops::mark_turn(node, resident, &turn).map_err(|error| Failure::new(error.to_string()))?;
+                host.interrupt_turn(thread, &turn).await.map(|()| true).map_err(Failure::new)
+            } else {
+                host.interrupt(thread).await.map_err(Failure::new)
+            }
+        }
         ("claude", _, _) => crate::claude::stop(node, resident),
         _ => Err(Failure::new(format!("{resident} is a session the World does not hold; stop it where it is open"))),
     }
