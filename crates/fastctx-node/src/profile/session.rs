@@ -11,6 +11,16 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+fn write_session_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    match std::fs::read(path) {
+        Ok(held) if held == bytes => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fastctx_platform::publish(path, bytes, fastctx_platform::Permissions::Private)
+}
+
 pub(crate) const INTRO: &str = "The user's own instructions for all work for them; follow them:";
 pub(crate) const CHANGED: &str =
     "=== the user's own instructions changed; they now read as follows, and replace those you were given ===";
@@ -150,12 +160,8 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
         fastctx_hosts::claude::assisted::configure(&mut settings, about.home.as_deref().unwrap_or(&default), &env)
             .map_err(Failure::new)?;
     }
-    fastctx_platform::publish(
-        &directory.claude_settings(),
-        &serde_json::to_vec_pretty(&settings).unwrap(),
-        fastctx_platform::Permissions::Private,
-    )
-    .map_err(|e| Failure::new(e.to_string()))?;
+    write_session_file(&directory.claude_settings(), &serde_json::to_vec_pretty(&settings).unwrap())
+        .map_err(|e| Failure::new(e.to_string()))?;
     if creating || mcp.is_file() {
         let mut servers = servers(node, id, &about.acting, &options.mcp_off, false);
         if assisting {
@@ -172,12 +178,8 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
             }));
         }
         let value = json!({"mcpServers": servers});
-        fastctx_platform::publish(
-            &mcp,
-            &serde_json::to_vec_pretty(&value).unwrap(),
-            fastctx_platform::Permissions::Private,
-        )
-        .map_err(|e| Failure::new(e.to_string()))?;
+        write_session_file(&mcp, &serde_json::to_vec_pretty(&value).unwrap())
+            .map_err(|e| Failure::new(e.to_string()))?;
     }
     // A session Claude Code never paired has no directory to bring up to date.
     if let Some(session) = &about.session {
@@ -195,11 +197,7 @@ pub(crate) fn claude(node: &Node, id: &ResidentId, creating: bool) -> Result<std
 pub(crate) fn hand_to_session(node: &Node, id: &ResidentId, session: &std::path::Path) -> std::io::Result<()> {
     let prompt = node.residents.about(id).map(|(about, _)| prompt(node, &about.acting)).unwrap_or_default();
     // An empty block also replaces an earlier prompt after account access is lost.
-    fastctx_platform::publish(
-        &session.join("user.md"),
-        text(&prompt).as_bytes(),
-        fastctx_platform::Permissions::Private,
-    )
+    write_session_file(&session.join("user.md"), text(&prompt).as_bytes())
 }
 
 pub(crate) async fn refresh(node: &Arc<Node>) {

@@ -24,6 +24,7 @@ mod cache;
 mod commands;
 #[cfg(test)]
 mod contract;
+pub mod control_error;
 mod control_start;
 mod controls;
 mod history;
