@@ -39,7 +39,7 @@ env:
   TAURI_CLI: '@tauri-apps/cli@2.12.1'
   # The release before this one: the network drill runs its hub with this one's machines, and its
   # node on this one's hub, from its Linux package.
-  EARLIER_RELEASE: 1.0.1-beta.9
+  EARLIER_RELEASE: 1.0.1-beta.10
   # The drills run on a ci/ branch, never for a version tag.
   DRILLS: ${{ github.ref_type == 'branch' }}
 
@@ -300,6 +300,11 @@ jobs:
           if-no-files-found: error
       - name: Smoke test on this machine
         run: python scripts/smoke.py kernel/fastctx --service
+      # The World's Claude plugin, as this kernel writes it, through Claude Code's own scanner and plugin
+      # tests: a module the scanner refuses does not load at all, and nothing of ours would see it.
+      - if: matrix.target == 'x86_64-unknown-linux-gnu'
+        name: The Claude plugin loads in Claude Code
+        run: python scripts/claude-plugin.py kernel/fastctx
       # The servers people bring are often far older than this one. The same smoke test runs again
       # with every system call Linux 3.13 lacked answering ENOSYS, and what CentOS 7's kernel has but
       # refuses as invalid refused so, as such a kernel answers them, so a call the World makes with

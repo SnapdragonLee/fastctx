@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// How long a Codex compaction may take before what came of it is not known.
-const COMPACTING: Duration = Duration::from_secs(30 * 60);
+pub(crate) const COMPACTING: Duration = Duration::from_secs(30 * 60);
 /// How long the turn of a Codex compaction may take to begin.
 const COMPACTION_BEGINS: Duration = Duration::from_secs(2 * 60);
 
@@ -57,8 +57,10 @@ fn event(node: &Node, id: &ResidentId, row: &PendingControl) -> Result<(), Failu
 /// ends (`world-gui.md`, 对话): all a user does to it, but answering it,
 /// reading what it offers and withdrawing one that waits.
 pub(crate) fn told(control: &Control) -> bool {
-    !matches!(control, Control::Answer { .. } | Control::CancelControl { .. } | Control::Agents | Control::AgentMessages { .. })
-        && !matches!(control, Control::Command { name, args, path: None } if name == "model" && args.trim().is_empty())
+    !matches!(
+        control,
+        Control::Answer { .. } | Control::CancelControl { .. } | Control::Agents | Control::AgentMessages { .. }
+    ) && !matches!(control, Control::Command { name, args, path: None } if name == "model" && args.trim().is_empty())
 }
 
 /// A control done now, told in its conversation as begun.
@@ -103,7 +105,7 @@ fn settle(node: &Arc<Node>, id: &ResidentId, mut row: PendingControl, result: &R
             row.result = Some(Box::new(done.clone()));
         }
         Err(error) => {
-            row.state = ControlState::Failed;
+            row.state = if error.is_control_uncertain() { ControlState::Uncertain } else { ControlState::Failed };
             row.error = Some(error.message.clone());
         }
     }
@@ -136,10 +138,14 @@ fn after_compaction(node: Arc<Node>, id: ResidentId, mut row: PendingControl) {
                     row.state = ControlState::Completed;
                     row.result = Some(Box::new(Controlled::Done { said: None }));
                 } else {
-                    row.state = ControlState::Failed;
-                    row.error = Some(now.trouble.map(|trouble| trouble.text).unwrap_or_else(|| {
-                        "the compaction's turn ended without compacting the conversation".into()
-                    }));
+                    // A process exit can synthesize the turn's end before its
+                    // compaction receipt arrives. No boundary is no proof of failure.
+                    row.state = ControlState::Uncertain;
+                    row.error = Some(
+                        now.trouble
+                            .map(|trouble| trouble.text)
+                            .unwrap_or_else(|| "the compaction's turn ended without confirming its outcome".into()),
+                    );
                 }
                 break;
             }
