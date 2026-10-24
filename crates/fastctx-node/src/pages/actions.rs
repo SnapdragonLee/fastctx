@@ -13,11 +13,10 @@ use fastctx_types::remote::{RemoteCall, RemoteReply};
 use fastctx_types::residents::{Delivery, Notice};
 use fastctx_types::session::Speaker;
 use fastctx_types::town::Looked;
-use fastctx_types::{Address, JournalCall, MachineName, NoticeId, PageName, Reply, TownName};
+use fastctx_types::{Address, MachineName, NoticeId, PageName, TownName};
 
 use crate::Node;
 use crate::speech::Owed;
-use crate::town::caller::Caller;
 
 pub async fn relay(
     node: &Arc<Node>,
@@ -173,8 +172,14 @@ async fn execute(node: &Arc<Node>, source: PageSource, action: PageInvocation) -
             let town = Some(source.town.clone());
             let account = source.identity.as_ref().and_then(super::identity::account);
             let owner = fastctx_types::run::JobOwner::Page { page: source };
-            let request =
-                fastctx_types::run::RunRequest { call_id: None, script, cwd: None, writes_off: false, wait: None };
+            let request = fastctx_types::run::RunRequest {
+                turn: None,
+                call_id: None,
+                script,
+                cwd: None,
+                writes_off: false,
+                wait: None,
+            };
             let (reply, _) = node.jobs.run(node, owner, town, request, account).await?;
             Ok(PageResult::Run(Box::new(reply)))
         }
@@ -198,29 +203,17 @@ async fn execute(node: &Arc<Node>, source: PageSource, action: PageInvocation) -
             let delivery = Delivery {
                 id: NoticeId::try_from(format!("page-{suffix}")).expect("hex notice id"),
                 at: jiff::Timestamp::now(),
-                notice: Notice::Words { from: Speaker::Page { page: Box::new(source) }, text },
+                notice: Notice::Words {
+                    from: Speaker::Page { page: Box::new(source) },
+                    text,
+                    goal_report: None,
+                    goal_question: None,
+                },
             };
             let landed = crate::speech::tell_here(node, &to.resident, delivery, Owed::Nobody).await?;
             Ok(PageResult::Said { to, landed })
         }
-        PageInvocation::Journal { journal, text } => {
-            let town = source.town.clone();
-            let caller = Caller::Page(Box::new(source));
-            let call = JournalCall::Add {
-                town: Some(town),
-                journal,
-                text,
-                description: None,
-                cites: Vec::new(),
-                attach: Vec::new(),
-                model: None,
-            };
-            let reply = crate::town::journal::call(node, &caller, call).await?;
-            match reply {
-                Reply::EntryAdded { journal, id, .. } => Ok(PageResult::EntryAdded { journal, id }),
-                _ => unreachable!("journal add returns the written entry"),
-            }
-        }
+        PageInvocation::Journal { .. } => Err(Failure::not_run(fastctx_types::memory::LEGACY)),
     }
 }
 
