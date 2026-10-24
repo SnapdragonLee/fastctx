@@ -42,7 +42,7 @@ fn deleted(id: &ResidentId) -> std::io::Error {
 pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -> std::io::Result<()> {
     let Some((about, _)) = node.residents.about(id) else { return Err(deleted(id)) };
     if let Happened::Heard { message: Some(message), .. } = &event.happened
-        && (about.host.agent.as_str() == "codex" && about.world_started && message.detail["type"] == "userMessage"
+        && (about.host.agent.as_str() == "codex" && about.world_managed() && message.detail["type"] == "userMessage"
             || about.host.agent.as_str() == "claude" && message.detail["uuid"].is_string())
     {
         return crate::user_images::live(node, id, event).await;
@@ -52,6 +52,15 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
         return Ok(());
     }
     let directory = node.world.conversation(id);
+    let question_key = match &event.happened {
+        Happened::Finished { turn, item } => crate::goals::questions::key(turn, item),
+        _ => None,
+    };
+    if let Some(key) = &question_key
+        && crate::delivery::has_event(&directory, key)?
+    {
+        return Ok(());
+    }
     if about.host.agent.as_str() == "claude" {
         crate::claude::turn_facts::observe(&directory, &event.happened)?;
     }
@@ -88,6 +97,9 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
             _ => break,
         }
     }
+    if !matches!(event.happened, Happened::TurnStarted { .. }) {
+        crate::turn_evidence::observe(node, id, &event)?;
+    }
     crate::run_facts::attach(&directory, &mut event)?;
     if let Happened::Changed { change: SessionChange::Status { waiting_for_user: Some(waiting), .. }, .. } =
         &event.happened
@@ -118,7 +130,9 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
             crate::asked::settle(node, id, |asked| asked.waits && asked.id == request_id)?;
         }
         Happened::Finished { item, .. } => {
-            if let Some(asked) = crate::asked::of_item(item, event.at) {
+            if let Some(asked) = crate::asked::of_item(item, event.at)
+                && !crate::goals::questions::route(node, id, item, event.at)?
+            {
                 crate::asked::ask(node, id, asked)?;
             }
             // A Codex thread keeps its first instructions through compacting
@@ -134,9 +148,7 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
                 && about.host.agent.as_str() == "codex"
                 && about.world_started
             {
-                node.residents.compacted(id);
-                let (node, id, compaction) = (node.clone(), id.clone(), item.id.clone());
-                tokio::spawn(async move { crate::focus::compacted(&node, &id, &compaction).await });
+                crate::context::compacted(node, id, &item.id)?;
             }
         }
         Happened::TurnEnded { .. } => crate::asked::settle(node, id, |asked| asked.waits)?,
@@ -199,11 +211,13 @@ pub async fn apply(node: &Arc<Node>, id: &ResidentId, mut event: SessionEvent) -
                         return Ok(());
                     }
                     node.residents.turn_started(&node.world, id, turn, event.at)?;
+                    crate::turn_evidence::observe(node, id, &event)?;
                     // What waited to ride with the next turn goes into this one.
                     let (node, id) = (node.clone(), id.clone());
                     tokio::spawn(async move { crate::speech::along(&node, &id).await });
                     format!("started:{turn}")
                 }
+                Happened::Finished { .. } if question_key.is_some() => question_key.expect("known question"),
                 _ => serde_json::to_string(&event).map_err(std::io::Error::other)?,
             };
             if crate::delivery::event(&directory, &key, &event)? {
@@ -234,7 +248,9 @@ pub fn opening(text: &str, chars: usize) -> String {
 fn recorded(agent: &str, happened: &Happened) -> bool {
     match happened {
         happened if !happened.kept() => false,
-        Happened::Finished { .. } => !matches!(agent, "codex" | "claude"),
+        Happened::Finished { turn, item } => {
+            crate::goals::questions::key(turn, item).is_some() || !matches!(agent, "codex" | "claude")
+        }
         _ => true,
     }
 }
@@ -303,6 +319,7 @@ async fn finish_at(
     {
         end.facts.get_or_insert_with(Default::default).limits = Some(limits);
     }
+    crate::turn_evidence::freeze(node, id, turn, &mut end);
     let mut readers = node.residents.readers(id, turn);
     readers.extend_from_slice(additional);
     let accepted: Vec<_> = crate::delivery::handovers(&directory)?
@@ -317,6 +334,15 @@ async fn finish_at(
             || (turn.is_empty() && now.turn.is_none() && now.activity == fastctx_types::residents::Activity::Busy)
     });
     let settles_queue = current || crate::composer::awaits_turn(node, id, turn).await.map_err(std::io::Error::other)?;
+    if end.how == TurnHow::Interrupted
+        && settles_queue
+        && crate::delivery::terminal(&directory, turn)?.is_none()
+        && crate::turn_evidence::source(node, id, turn)?.is_none()
+        && crate::turn_evidence::classify(&end, None, about.host.agent.as_str()).kind
+            == fastctx_types::turn_evidence::StopKind::UserStopped
+    {
+        crate::goals::holding::stop(node, id, Some(turn.to_string())).map_err(std::io::Error::other)?;
+    }
     let (finished, first) = crate::delivery::finish_at(&directory, turn, end, &readers, ended_at, settles_queue)?;
     if first {
         crate::usage::turn_ended(node, id, &about, &finished.end, ended_at.unwrap_or_else(Timestamp::now));
@@ -342,6 +368,7 @@ async fn finish_at(
         (how, None) => Some(Trouble { at: finished.at, text: format!("turn {how}") }),
     };
     node.residents.take_owed(&node.world, id, turn, &node.machine(), trouble)?;
+    crate::turn_evidence::ended(node, id, turn);
     for handover in &accepted {
         for input in &handover.inputs {
             crate::speech::heard(node, id, &input.delivery, turn);
@@ -494,13 +521,25 @@ pub fn pay<'a>(
                 _ => None,
             };
             // Telling can lead back here, as a reader's turn ends at once.
+            let owed = if answer.delivery.notice.is_question()
+                || matches!(&answer.delivery.notice, Notice::Words { goal_report: Some(_), .. })
+            {
+                Owed::Nobody
+            } else {
+                Owed::Working
+            };
+            let account = answer
+                .delivery
+                .notice
+                .goal_account()
+                .map(|account| fastctx_types::access::Acting::one(account.hub.clone(), account.account.clone()));
             let landed = Box::pin(speech::tell(
                 node,
-                &acting,
+                account.as_ref().unwrap_or(&acting),
                 &answer.to,
                 answer.delivery.id.clone(),
                 answer.delivery.notice.clone(),
-                Owed::Working,
+                owed,
             ))
             .await;
             if let Err(failure) = &landed {
@@ -565,7 +604,7 @@ pub async fn unsettled(
 ) {
     let result = async {
         let mut handover = crate::delivery::begin(directory, vec![pending])?;
-        unresolved(node, id, directory, &mut handover, how, why).await
+        unresolved(node, id, directory, &mut handover, how, why, None).await
     }
     .await;
     if let Err(error) = result {
@@ -582,6 +621,7 @@ pub async fn unresolved(
     handover: &mut crate::delivery::Handover,
     how: TurnHow,
     why: String,
+    error: Option<serde_json::Value>,
 ) -> std::io::Result<()> {
     let accepted: std::collections::HashSet<_> = crate::delivery::handovers(directory)?
         .into_iter()
@@ -591,7 +631,7 @@ pub async fn unresolved(
     if handover.inputs.iter().all(|input| accepted.contains(&input.delivery.id)) {
         return Ok(());
     }
-    let end = TurnEnd { facts: None, error: None, how, reason: Some(why), duration_ms: None, last_message: None };
+    let end = TurnEnd { facts: None, error, how, reason: Some(why), duration_ms: None, last_message: None };
     crate::delivery::unresolved(directory, handover, end)?;
     let Some((about, _)) = node.residents.about(id) else { return Ok(()) };
     let readers: std::collections::BTreeSet<Address> = handover
@@ -755,7 +795,7 @@ async fn recover_one(node: &Arc<Node>, id: &ResidentId, turn: &str) -> std::io::
     }
     let end = TurnEnd {
         facts: None,
-        error: None,
+        error: Some(serde_json::json!({"world":"node_restarted"})),
         how: TurnHow::Interrupted,
         reason: Some(format!("the node on {} restarted while it ran", node.machine())),
         duration_ms: None,

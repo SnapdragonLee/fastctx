@@ -75,6 +75,7 @@ fn resident(
             origin,
             session: None,
             world_started: true,
+            native_resumed: false,
             model: Some(model.to_string()),
             acting: Default::default(),
             focus: Default::default(),
@@ -113,7 +114,7 @@ fn state(now: Timestamp, activity: Activity, since: i64) -> Now {
 
 fn action(now: Timestamp, minutes: i64, on: &str, hand: &str, what: &str, result: &str) -> Action {
     Action {
-        at: ago(now, minutes),
+        turn: None, at: ago(now, minutes),
         machine: machine(on),
         hand: hand.to_string(),
         what: what.to_string(),
@@ -364,6 +365,16 @@ fn agents(now: Timestamp) -> fastctx_types::agents::AgentsReply {
 
 fn nodes(now: Timestamp) -> NodesReply {
     let facts = |name: &str, os: &str, home: &str| MachineFacts {
+        turn_debts: false,
+        goal_runtime: false,
+        goal_colleagues: false,
+        goal_waits: false,
+        goal_questions: false,
+        goal_question_words: false,
+        goal_commands: false,
+        goal_reports: false,
+        sentinels: false,
+        sentinel_look: false,
         name: machine(name),
         os: os.into(),
         arch: "x86_64".into(),
@@ -376,6 +387,8 @@ fn nodes(now: Timestamp) -> NodesReply {
         mcp_import: false,
         page_accounts: false,
         attachment_places: false,
+        memory_folders: false,
+        collaboration_tree: false,
         completion_receipts: false,
         upload_resumes: false,
         attachment_references: false,
@@ -437,6 +450,7 @@ fn map(now: Timestamp) -> MapView {
     let claude = Writer::Resident { address: address("claude-2b1c", "desktop") };
     let codex = Writer::Resident { address: address("codex-7f3a", "laptop") };
     MapView {
+        memory: None,
         pages: Vec::new(),
         town: town("mark50"),
         ledger: "~/.fastctx/world/towns/mark50/ledger".into(),

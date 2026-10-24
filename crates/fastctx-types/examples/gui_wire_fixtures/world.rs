@@ -91,6 +91,7 @@ fn residents() -> Vec<ResidentNow> {
                 },
                 session: (i != 0).then(|| "thread-1".into()),
                 world_started: i != 0,
+            native_resumed: false,
                 model: (i != 0).then(|| "model-a".into()),
                 acting: if i == 0 {
                     fastctx_types::access::Acting::Here
@@ -116,6 +117,7 @@ fn residents() -> Vec<ResidentNow> {
                 activity,
                 since: at(),
                 turn: (i == 0).then(|| "turn-1".into()),
+                last_turn: None,
                 owed: if i == 0 { BTreeMap::from([("turn-1".into(), vec![address()])]) } else { BTreeMap::new() },
                 answering: if i == 0 { vec![address()] } else { vec![] },
                 trouble: (i == 2).then(|| Trouble { at: at(), text: "host disconnected".into() }),
@@ -149,7 +151,7 @@ fn residents() -> Vec<ResidentNow> {
                 },
             }),
             last_action: (i == 0).then(|| Action {
-                at: at(),
+                turn: None, at: at(),
                 machine: machine(),
                 hand: "run".into(),
                 what: "pwd".into(),
@@ -289,6 +291,16 @@ fn nodes() -> Vec<NodesReply> {
         ms: Some(41),
     });
     let facts = |name: &str, os: &str, lifetime: bool| MachineFacts {
+        turn_debts: false,
+        goal_runtime: false,
+        goal_colleagues: lifetime,
+        goal_waits: lifetime,
+        goal_questions: lifetime,
+        goal_question_words: lifetime,
+        goal_commands: lifetime,
+        goal_reports: lifetime,
+        sentinels: false,
+        sentinel_look: false,
         name: name.parse().unwrap(),
         os: os.into(),
         arch: if os == "windows" { "x86_64".into() } else { "aarch64".into() },
@@ -301,6 +313,8 @@ fn nodes() -> Vec<NodesReply> {
         mcp_import: true,
         page_accounts: true,
         attachment_places: true,
+        memory_folders: false,
+        collaboration_tree: false,
         completion_receipts: false,
         upload_resumes: false,
         attachment_references: false,
