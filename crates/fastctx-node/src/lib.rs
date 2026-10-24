@@ -9,7 +9,10 @@
 //! it records what happened while it was away, such as jobs whose
 //! supervisor did not survive a restart of the machine.
 
+mod account_records;
 pub mod activity;
+pub mod timers;
+mod turn_evidence;
 mod admission;
 mod admitted;
 mod afoot;
@@ -32,6 +35,7 @@ mod collab;
 mod colleagues;
 mod composer;
 mod consent;
+pub mod context;
 mod control;
 mod control_queue;
 mod copy;
@@ -79,11 +83,13 @@ mod machine;
 mod managed;
 mod management;
 mod mcp;
+mod memory;
 mod on;
 mod on_delivery;
 mod on_stop;
 mod own_collab;
 mod pages;
+mod plan;
 mod profile;
 mod program_collection;
 mod proxy_setting;
@@ -98,7 +104,10 @@ mod resident_storage;
 mod residents;
 mod retention;
 mod run_facts;
+mod goals;
+mod scratch;
 mod server;
+mod sentinels;
 mod server_invitation;
 mod session_live;
 mod session_options;
@@ -128,6 +137,8 @@ mod who;
 mod world;
 mod world_program;
 mod write;
+mod on_steps;
+mod step_command;
 mod write_command;
 
 use std::path::{Path, PathBuf};
@@ -156,6 +167,11 @@ pub(crate) struct Node {
     /// hub renames it (`world::follow_rename`).
     machine: RwLock<machine::MachineFile>,
     jobs: jobs::Jobs,
+    timers: std::sync::OnceLock<Arc<timers::store::Store>>,
+    turn_activity: turn_evidence::Activities,
+    goals: goals::Services,
+    sentinel_waits: Arc<dyn turn_evidence::waiting::SentinelWaits>,
+    sentinels: sentinels::Services,
     mcp_keeping: std::sync::Mutex<()>,
     job_watches: job_watch::Watches,
     disk: ranked::Disk,
@@ -165,6 +181,10 @@ pub(crate) struct Node {
     disk_due: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
     job_readers: std::sync::Mutex<std::collections::HashMap<PathBuf, usize>>,
     residents: residents::Residents,
+    contexts: context::Updates,
+    context_deliveries: context::Deliveries,
+    scratch_deliveries: scratch::Deliveries,
+    native_context: codex::native_context::Observers,
     /// This machine's Codex app-server, holding the Codex residents the
     /// World started.
     codex: codex::hosts::CodexHosts,
@@ -195,6 +215,7 @@ pub(crate) struct Node {
     /// Moves whenever what an interface shows of the World may have changed,
     /// beyond the residents and jobs here (`shown`).
     shown: tokio::sync::watch::Sender<u64>,
+    memory_changes: tokio::sync::watch::Sender<u64>,
     /// What the other machines said of themselves (`facts`).
     facts: facts::Facts,
     /// Deletions of conversations still to be asked of hubs (`forget`).
@@ -278,6 +299,11 @@ impl Node {
     }
 
     /// What an interface shows of the World may have changed.
+    pub(crate) fn memory_changed(&self) {
+        self.memory_changes.send_modify(|value| *value = value.wrapping_add(1));
+        self.shown_changed();
+    }
+
     pub(crate) fn shown_changed(&self) {
         self.shown.send_modify(|changes| *changes = changes.wrapping_add(1));
     }
@@ -537,14 +563,25 @@ pub async fn run_prepared(
         Arc::new(move |line| codex_log.line(line)),
     );
     let claude = claude::Claude::new(&world)?;
-    let node = Arc::new(Node {
+    // Built cyclically so the goal services can hold a weak handle back to the
+    // node they reach account records and context through.
+    let node = Arc::new_cyclic(|weak: &std::sync::Weak<Node>| Node {
         root: fastctx_root.to_path_buf(),
         world,
         fastctx,
         machine: RwLock::new(machine),
         jobs: jobs::Jobs::new(),
+        timers: Default::default(),
+        turn_activity: Default::default(),
+        goals: goals::connected(weak.clone()),
+        sentinel_waits: Arc::new(sentinels::goal_seams::Waits(weak.clone())),
+        sentinels: sentinels::connected(weak.clone()),
         mcp_keeping: std::sync::Mutex::new(()),
         job_watches: Default::default(),
+        contexts: Default::default(),
+        context_deliveries: Default::default(),
+        scratch_deliveries: Default::default(),
+        native_context: Default::default(),
         disk: Default::default(),
         places: Default::default(),
         disk_changed: Default::default(),
@@ -567,6 +604,7 @@ pub async fn run_prepared(
         ways: tokio::sync::watch::channel(0).0,
         views: tokio::sync::watch::channel(0).0,
         shown: tokio::sync::watch::channel(0).0,
+        memory_changes: tokio::sync::watch::channel(0).0,
         facts: facts::Facts::default(),
         forget_asks: forget::Asks::default(),
         stuck: Default::default(),
@@ -646,9 +684,13 @@ pub async fn run_prepared(
     node.effects_changed.notify_waiters();
     composer::resume(&node);
     recovery::start(&node, jobs_reconciled);
+    timers::start(&node);
+    goals::start(&node);
+    sentinels::start(&node);
     on_delivery::resume(&node);
     retention::start(&node).context("starting command artifact retention")?;
     profile::session::start(&node);
+    context::start(&node);
     updates::start(&node);
     afoot::start(&node);
     usage::watch(&node);

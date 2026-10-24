@@ -20,6 +20,9 @@ use crate::Node;
 pub mod control;
 mod directories;
 pub mod hosts;
+pub(crate) mod native_context;
+pub(crate) mod native;
+pub(crate) mod native_lifetime;
 pub mod spawned;
 pub mod watch;
 
@@ -28,6 +31,19 @@ pub mod watch;
 pub async fn adopt(node: &Arc<Node>) {
     for resident in node.residents.everyone() {
         let about = &resident.about;
+        if about.native_resumed && resident.removed.is_none() {
+            if let Some(thread)=&about.session {
+                match node.codex.of(node,about) {
+                    Ok(host)=>host.adopt(thread,native::spec(node,about)),
+                    Err(error)=>node.log.line(format_args!("{} cannot be resumed: {error}",about.id)),
+                }
+            }
+            if resident.now.as_ref().is_some_and(|now|now.activity == Activity::Idle)
+                && let Err(error)=node.residents.change_now(&node.world,&about.id,|now| {now.activity=Activity::Asleep;now.since=jiff::Timestamp::now();}) {
+                node.log.line(format_args!("recording that {} sleeps: {error}",about.id));
+            }
+            continue;
+        }
         if !about.world_started || resident.removed.is_some() {
             continue;
         }
@@ -431,7 +447,7 @@ async fn drain(node: &Arc<Node>, thread: &str) {
                             turn,
                             end: fastctx_types::session::TurnEnd {
                                 facts: facts.map(Box::new),
-                                error: None,
+                                error: Some(serde_json::json!({"world":"host_exited"})),
                                 how: fastctx_types::session::TurnHow::Interrupted,
                                 reason: Some(format!("its app-server stopped ({how})")),
                                 duration_ms: None,

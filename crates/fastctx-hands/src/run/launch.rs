@@ -142,6 +142,7 @@ fn prepare(launch: &Launch<'_>, mode: OutputMode, stdin: Option<&Path>) -> Resul
     publish_new(&script, super::heredoc::mark_on_pipes(&launch.request.script).as_bytes(), Permissions::Private)
         .map_err(|error| failure("could not write the script", &error))?;
     let record = JobRecord {
+        turn: launch.request.turn.clone(),
         call_id: launch.request.call_id.clone(),
         id: job.clone(),
         machine: launch.names.me.clone(),
@@ -173,7 +174,7 @@ fn prepare(launch: &Launch<'_>, mode: OutputMode, stdin: Option<&Path>) -> Resul
         account: launch.account.cloned(),
     };
     record::write(&record_path, &record).map_err(|error| failure("could not write the job's record", &error))?;
-    if launch.on.is_some() {
+    if launch.on.is_some_and(|on|on.sentinel.is_none()) {
         // No supervisor can execute until its completion debt is durable.
         publish_new(&resident.job_owed(&job), b"", Permissions::Private)
             .map_err(|error| failure("could not keep the job's completion debt", &error))?;
