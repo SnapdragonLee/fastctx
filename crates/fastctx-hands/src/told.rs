@@ -15,6 +15,7 @@ use crate::run::present::{display_path, status_text};
 /// A notice as one block of text.
 pub fn told(notice: &Notice) -> String {
     match notice {
+        Notice::Sentinel { observation } => fastctx_types::sentinel_words::notification(observation, jiff::Timestamp::now()),
         Notice::JobEnded { job, machine, how, status, at, output, stderr, last, stop, .. } => {
             let how = match (how, status) {
                 (EndedHow::Finished, Some(status)) => status_text(*status),
@@ -55,10 +56,29 @@ pub fn told(notice: &Notice) -> String {
             "=== colleague {} on {} (in its turn) ===\n{}\n=== what it is doing: fastctx w {} ===",
             colleague.resident, colleague.machine, health.text, colleague.resident
         ),
-        Notice::Words { from, text } => words(from, text),
+        Notice::Question { text, .. } => text.clone(),
+        Notice::Words { text, goal_report: Some(_), .. } | Notice::Words { text, goal_question: Some(_), .. } => {
+            text.clone()
+        }
+        Notice::Words { from, text, .. } => words(from, text),
         Notice::Attached { message, text } => message.render(text),
         Notice::World { text, .. } => words(&Speaker::World, text),
     }
+}
+
+/// The colleague's original conclusion, with only a factual envelope around it.
+pub fn goal_report(report: &fastctx_types::goals::Report) -> String {
+    let elapsed = report.ended_at.as_second().saturating_sub(report.started_at.as_second()).max(0) as u64;
+    let resume = report.resume_at.map(|at| format!(", resumes at {at}")).unwrap_or_default();
+    format!(
+        "=== colleague {} on {} (goal {}, {}{resume}) ===\n{}\n=== what it did: fastctx w {} ===",
+        report.colleague.resident,
+        report.colleague.machine,
+        goal_status(report.status),
+        duration(elapsed),
+        report.text,
+        report.colleague.resident
+    )
 }
 
 /// Words for a session, under a head note saying who they are from, so the
@@ -93,6 +113,16 @@ pub fn turn_end(end: &TurnEnd) -> String {
         how.push_str(&duration(ms / 1000));
     }
     how
+}
+
+/// The goal's state as shown with its original report.
+pub fn goal_status(status: fastctx_types::goals::Status) -> &'static str {
+    match status {
+        fastctx_types::goals::Status::Active => "active",
+        fastctx_types::goals::Status::Complete => "complete",
+        fastctx_types::goals::Status::Blocked => "blocked",
+        fastctx_types::goals::Status::Paused => "paused",
+    }
 }
 
 /// A span of seconds as people say it: `35s`, `14m`, `2h10m`, `3d4h`.
