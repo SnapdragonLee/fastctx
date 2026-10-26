@@ -1,4 +1,5 @@
 mod common;
+// Modified to cover Unix bootstrap reaping while detached jobs remain independent.
 
 use common::{McpSession, mcp_text, normalized};
 use serde_json::Value;
@@ -538,6 +539,80 @@ fn detached_job_reaches_complete_after_its_starting_server_exits() {
     )));
     assert!(marker.exists());
     assert!(second.close().success());
+}
+
+#[cfg(unix)]
+#[test]
+fn background_jobs_reap_bootstraps_before_the_detached_job_finishes() {
+    let _serial = shell_contract_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let release = temp.path().join("release-job");
+    struct ReleaseOnDrop(std::path::PathBuf);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::write(&self.0, b"release");
+        }
+    }
+    let mut first = shell_session(temp.path(), None);
+    let started = first.call(
+        "run_background",
+        serde_json::json!({
+            "command": format!(
+                "while [ ! -e {} ]; do sleep 0.05; done; printf 'survived\\n'; exit 9",
+                bash_quote(&release)
+            ),
+            "login_shell": false
+        }),
+    );
+    let _release_on_drop = ReleaseOnDrop(release.clone());
+    let job_id = started_job_id(mcp_text(&started));
+    let meta: Value = serde_json::from_slice(
+        &std::fs::read(temp.path().join(".fastctx/jobs").join(&job_id).join("meta.json")).unwrap(),
+    )
+    .unwrap();
+    let runtime_pid = meta["origin"]["server_pid"].as_u64().unwrap() as u32;
+    assert_no_zombie_children(runtime_pid);
+    assert!(!temp.path().join(".fastctx/jobs").join(&job_id).join("exit.json").exists());
+    assert!(first.close().success());
+
+    let mut second = shell_session(temp.path(), None);
+    std::fs::write(&release, b"release").unwrap();
+    let output = wait_for_complete_from(&mut second, &job_id, Some(0));
+    assert!(output.contains("survived"), "{output}");
+    assert!(output.contains(&format!("job {job_id} exited 9;")), "{output}");
+    assert_no_zombie_children(runtime_pid);
+    for exit in [0, 7, 0, 7, 0, 7] {
+        let started = second.call(
+            "run_background",
+            serde_json::json!({"command": format!("exit {exit}"), "login_shell": false}),
+        );
+        let id = started_job_id(mcp_text(&started));
+        let output = wait_for_complete_from(&mut second, &id, Some(0));
+        assert!(output.contains(&format!("job {id} exited {exit};")), "{output}");
+        assert_no_zombie_children(runtime_pid);
+    }
+    assert!(second.close().success());
+}
+
+#[cfg(unix)]
+fn assert_no_zombie_children(parent: u32) {
+    // ps runs as this test's child, outside the runtime-host being examined.
+    let snapshot = Command::new("/bin/ps")
+        .args(["-axo", "pid=,ppid=,stat="])
+        .output()
+        .unwrap();
+    assert!(snapshot.status.success());
+    let text = String::from_utf8(snapshot.stdout).unwrap();
+    let zombies: Vec<_> = text
+        .lines()
+        .filter(|line| {
+            let columns: Vec<_> = line.split_whitespace().collect();
+            columns.len() == 3
+                && columns[1].parse::<u32>() == Ok(parent)
+                && columns[2].starts_with('Z')
+        })
+        .collect();
+    assert!(zombies.is_empty(), "runtime-host retained zombie children: {zombies:?}");
 }
 
 #[test]

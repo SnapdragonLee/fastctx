@@ -1,4 +1,5 @@
 //! Thin stdio proxy and the per-user, per-build FastCtx control center.
+//! Modified to reap the short-lived Unix control-center bootstrap.
 
 pub(crate) mod activity;
 mod hosts;
@@ -275,10 +276,21 @@ fn spawn_bootstrap(executable: &Path, environment: &SessionEnvironment) -> Resul
         use std::os::windows::process::CommandExt;
         command.creation_flags(crate::process_policy::noninteractive_creation_flags(0));
     }
-    command
+    let child = command
         .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Cannot start the FastCtx control-center bootstrap: {error}"))
+        .map_err(|error| format!("Cannot start the FastCtx control-center bootstrap: {error}"))?;
+    // The bootstrap only starts runtime-host and exits. Waiting for this
+    // direct child does not wait for the detached control center itself.
+    #[cfg(unix)]
+    {
+        let mut child = child;
+        child
+            .wait()
+            .map_err(|error| format!("Cannot reap the FastCtx control-center bootstrap: {error}"))?;
+    }
+    #[cfg(not(unix))]
+    drop(child);
+    Ok(())
 }
 
 /// Intermediate child that reparents the long-lived control center before the proxy returns.
@@ -725,6 +737,32 @@ mod tests {
     fn endpoint_hashes_are_stable_and_separate_inputs() {
         assert_eq!(short_hash(b"home-a", 12), short_hash(b"home-a", 12));
         assert_ne!(short_hash(b"home-a", 12), short_hash(b"home-b", 12));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_bootstrap_is_reaped_before_start_returns() {
+        use crate::session::SessionEnvironment;
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let pid_file = temp.path().join("bootstrap.pid");
+        let executable = temp.path().join("bootstrap");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s' \"$$\" > \"$TEST_BOOTSTRAP_PID_FILE\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let environment = SessionEnvironment::new(
+            temp.path().to_path_buf(),
+            vec![("TEST_BOOTSTRAP_PID_FILE".into(), pid_file.as_os_str().to_owned())],
+        );
+        super::spawn_bootstrap(&executable, &environment).unwrap();
+        let pid: i32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        let mut status = 0;
+        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        assert_eq!(waited, -1, "control-center bootstrap {pid} was not reaped");
+        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD));
     }
 
     #[cfg(unix)]

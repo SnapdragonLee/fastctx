@@ -1,4 +1,5 @@
 //! Detached-supervisor launch, output capture, tree ownership, and kill acknowledgement.
+//! Modified to reap the Unix bootstrap after the supervisor becomes ready.
 
 use super::identity::{identity_is_alive, process_identity, supervisor_isolation_warning};
 use super::model::{
@@ -72,7 +73,16 @@ pub(crate) fn launch_supervisor(
         let _ = sender.send(result);
     });
     match receiver.recv_timeout(STARTUP_TIMEOUT) {
-        Ok(Ok(line)) if line.trim_end() == "READY" => Ok(()),
+        Ok(Ok(line)) if line.trim_end() == "READY" => {
+            // On Unix this is the short-lived job-bootstrap, not job-host.
+            // Dropping std::process::Child does not reap it. The detached
+            // job-host owns the command and must keep running independently.
+            #[cfg(unix)]
+            child.wait().map_err(|error| {
+                format!("Cannot reap the background job bootstrap: {error}.")
+            })?;
+            Ok(())
+        }
         Ok(Ok(line)) if line.starts_with("ERROR\t") => {
             let encoded = line["ERROR\t".len()..].trim_end();
             let message =
@@ -827,4 +837,81 @@ pub(crate) fn run_watchdog(pid: u32, started: String) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod bootstrap_reaping_tests {
+    use super::*;
+    use crate::session::SessionEnvironment;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn bootstrap_is_reaped_after_ready() {
+        check_bootstrap("READY", true);
+    }
+
+    #[test]
+    fn bootstrap_is_reaped_after_reported_startup_error() {
+        check_bootstrap("ERROR\t\"injected startup failure\"", false);
+    }
+
+    fn check_bootstrap(reply: &str, succeeds: bool) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let pid_file = root.join("bootstrap.pid");
+        let executable = root.join("bootstrap");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\nprintf '%s' \"$$\" > \"$TEST_BOOTSTRAP_PID_FILE\"\ncat >/dev/null\nprintf '%s\\n' \"$TEST_BOOTSTRAP_REPLY\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let environment = SessionEnvironment::new(
+            root.to_path_buf(),
+            vec![
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                ("TEST_BOOTSTRAP_PID_FILE".into(), pid_file.as_os_str().to_owned()),
+                ("TEST_BOOTSTRAP_REPLY".into(), reply.into()),
+            ],
+        );
+        let spec = LaunchSpec {
+            job_id: "j-bootstrap-test".into(),
+            job_dir: root.to_path_buf(),
+            bash: "/bin/sh".into(),
+            command: "true".into(),
+            cwd: root.to_path_buf(),
+            login_shell: false,
+            encoding: None,
+            environment,
+            utf8_locale: String::new(),
+            output_limit_bytes: 1024,
+            origin: super::super::store::origin_snapshot(root),
+        };
+        let result = launch_supervisor(&executable, &spec);
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        let pid: i32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut status = 0;
+            // This exact PID is the fixture's direct child; never reap another test's children.
+            let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if waited == -1 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                assert_eq!(error.raw_os_error(), Some(libc::ECHILD), "{error}");
+                break;
+            }
+            assert_ne!(waited, pid, "launch_supervisor left bootstrap {pid} unreaped");
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                panic!("bootstrap {pid} remained live after its readiness response");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
