@@ -284,9 +284,9 @@ fn spawn_bootstrap(executable: &Path, environment: &SessionEnvironment) -> Resul
     #[cfg(unix)]
     {
         let mut child = child;
-        child
-            .wait()
-            .map_err(|error| format!("Cannot reap the FastCtx control-center bootstrap: {error}"))?;
+        child.wait().map_err(|error| {
+            format!("Cannot reap the FastCtx control-center bootstrap: {error}")
+        })?;
     }
     #[cfg(not(unix))]
     drop(child);
@@ -755,14 +755,20 @@ mod tests {
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let environment = SessionEnvironment::new(
             temp.path().to_path_buf(),
-            vec![("TEST_BOOTSTRAP_PID_FILE".into(), pid_file.as_os_str().to_owned())],
+            vec![(
+                "TEST_BOOTSTRAP_PID_FILE".into(),
+                pid_file.as_os_str().to_owned(),
+            )],
         );
         super::spawn_bootstrap(&executable, &environment).unwrap();
         let pid: i32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
         let mut status = 0;
         let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
         assert_eq!(waited, -1, "control-center bootstrap {pid} was not reaped");
-        assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD));
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 
     #[cfg(unix)]

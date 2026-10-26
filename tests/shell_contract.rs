@@ -553,7 +553,14 @@ fn background_jobs_reap_bootstraps_before_the_detached_job_finishes() {
             let _ = std::fs::write(&self.0, b"release");
         }
     }
-    let mut first = shell_session(temp.path(), None);
+    let open_session = || {
+        let mut command = shell_command(temp.path(), None);
+        // The shared host outlives each client. Its OS runtime directories
+        // must therefore outlive the first client's temporary test fixture.
+        common::isolate_command(&mut command, temp.path());
+        McpSession::start(command)
+    };
+    let mut first = open_session();
     let started = first.call(
         "run_background",
         serde_json::json!({
@@ -567,19 +574,35 @@ fn background_jobs_reap_bootstraps_before_the_detached_job_finishes() {
     let _release_on_drop = ReleaseOnDrop(release.clone());
     let job_id = started_job_id(mcp_text(&started));
     let meta: Value = serde_json::from_slice(
-        &std::fs::read(temp.path().join(".fastctx/jobs").join(&job_id).join("meta.json")).unwrap(),
+        &std::fs::read(
+            temp.path()
+                .join(".fastctx/jobs")
+                .join(&job_id)
+                .join("meta.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     let runtime_pid = meta["origin"]["server_pid"].as_u64().unwrap() as u32;
     assert_no_zombie_children(runtime_pid);
-    assert!(!temp.path().join(".fastctx/jobs").join(&job_id).join("exit.json").exists());
+    assert!(
+        !temp
+            .path()
+            .join(".fastctx/jobs")
+            .join(&job_id)
+            .join("exit.json")
+            .exists()
+    );
     assert!(first.close().success());
 
-    let mut second = shell_session(temp.path(), None);
+    let mut second = open_session();
     std::fs::write(&release, b"release").unwrap();
     let output = wait_for_complete_from(&mut second, &job_id, Some(0));
     assert!(output.contains("survived"), "{output}");
-    assert!(output.contains(&format!("job {job_id} exited 9;")), "{output}");
+    assert!(
+        output.contains(&format!("job {job_id} exited 9;")),
+        "{output}"
+    );
     assert_no_zombie_children(runtime_pid);
     for exit in [0, 7, 0, 7, 0, 7] {
         let started = second.call(
@@ -588,7 +611,10 @@ fn background_jobs_reap_bootstraps_before_the_detached_job_finishes() {
         );
         let id = started_job_id(mcp_text(&started));
         let output = wait_for_complete_from(&mut second, &id, Some(0));
-        assert!(output.contains(&format!("job {id} exited {exit};")), "{output}");
+        assert!(
+            output.contains(&format!("job {id} exited {exit};")),
+            "{output}"
+        );
         assert_no_zombie_children(runtime_pid);
     }
     assert!(second.close().success());
@@ -612,7 +638,10 @@ fn assert_no_zombie_children(parent: u32) {
                 && columns[2].starts_with('Z')
         })
         .collect();
-    assert!(zombies.is_empty(), "runtime-host retained zombie children: {zombies:?}");
+    assert!(
+        zombies.is_empty(),
+        "runtime-host retained zombie children: {zombies:?}"
+    );
 }
 
 #[test]
