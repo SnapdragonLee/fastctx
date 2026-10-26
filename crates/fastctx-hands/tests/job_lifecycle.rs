@@ -1,5 +1,6 @@
 //! Process-level lifecycle contract, using a private World and a local node
 //! protocol peer. The gates establish ordering without runtime deadlines.
+//! Modified to verify that detached launches also reap their direct children.
 
 use std::ffi::OsString;
 use std::fs;
@@ -53,6 +54,7 @@ fn main() -> Result {
 }
 
 fn exercise() -> Result {
+    assert_launch_children_reaped()?;
     let root = tempfile::Builder::new().prefix("fastctx-job-").tempdir()?;
     let root = root.path().canonicalize()?;
     let world = WorldDir::under(&root);
@@ -94,6 +96,7 @@ fn exercise() -> Result {
         let request = RunRequest { call_id: None, script, cwd: Some(display(&root)), writes_off: false, wait: None };
         let launch = run::Launch { request: &request, ..launch };
         let job = run::launch_with_io(&launch, OutputMode::Separate, Some(&input))?;
+        assert_launch_children_reaped()?;
         let (mut child, identity) = arrived(&gate, &job).await?;
         let running = until(&job, |r| r.output_drained.is_some() && r.remaining.is_some_and(|n| n > 0)).await?;
         assert!(running.end.is_none() && running.output_ended_at.is_none());
@@ -121,6 +124,7 @@ fn exercise() -> Result {
         };
         let launch = run::Launch { request: &request, ..launch };
         let job = run::launch(&launch)?;
+        assert_launch_children_reaped()?;
         let ended = until(&job, |r| r.end.is_some()).await?;
         assert_eq!(fs::read(&ended.output)?, b"outerr");
         assert!(ended.stderr.is_none() && ended.stdin.is_none());
@@ -137,6 +141,7 @@ fn exercise() -> Result {
             let launch = run::Launch { request: &request, ..launch };
             let mode = if separate { OutputMode::Separate } else { OutputMode::Merged };
             let job = run::launch_with_io(&launch, mode, None)?;
+            assert_launch_children_reaped()?;
             let (_child, identity) = arrived(&gate, &job).await?;
             let running = until(&job, |r| r.exit.is_some()).await?;
             assert_eq!(running.exit.unwrap().status, ExitStatus::Code(23));
@@ -176,6 +181,7 @@ fn exercise() -> Result {
         };
         let launch = run::Launch { request: &request, ..launch };
         let job = run::launch(&launch)?;
+        assert_launch_children_reaped()?;
         let ended = run::stop(
             &world,
             &job.record,
@@ -200,6 +206,7 @@ fn exercise() -> Result {
             };
             let launch = run::Launch { request: &request, ..launch };
             let job = run::launch(&launch)?;
+            assert_launch_children_reaped()?;
             let (_child, identity) = arrived(&gate, &job).await?;
             let supervisor = job.supervisor.as_ref().expect("supervisor identity");
             // SAFETY: this test started the still-live supervisor.
@@ -217,7 +224,33 @@ fn exercise() -> Result {
         }
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
+    assert_launch_children_reaped()?;
     node.abort();
+    Ok(())
+}
+
+fn assert_launch_children_reaped() -> Result {
+    #[cfg(unix)]
+    loop {
+        // This harness is one process, with no concurrent direct-child fixtures.
+        // Supervisors and their commands must already belong to the system's
+        // reaper. An is_alive check would accept an exited, unreaped bootstrap.
+        let mut status = 0;
+        let waited = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if waited == -1 {
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::EINTR) => continue,
+                Some(libc::ECHILD) => break,
+                _ => return Err(error.into()),
+            }
+        }
+        return Err(io::Error::other(format!(
+            "detached launch left a direct child: waitpid returned {waited} (status {status}); \
+             expected ECHILD after the bootstrap was reaped"
+        ))
+        .into());
+    }
     Ok(())
 }
 
