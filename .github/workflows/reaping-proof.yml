@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: reaping-v026-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   native:
     strategy:
@@ -34,7 +37,7 @@ jobs:
       - name: Prove the regression fails without the successful-launch fix
         if: runner.os != 'Windows'
         run: |
-          trap 'git checkout -- src/shell/jobs/host.rs; git apply --include=src/shell/jobs/host.rs rustfmt.patch' EXIT
+          trap 'git checkout -- src/shell/jobs/host.rs; git apply --allow-empty --include=src/shell/jobs/host.rs rustfmt.patch' EXIT
           node <<'JS'
           const fs = require('fs'), cp = require('child_process');
           const file = 'src/shell/jobs/host.rs';
