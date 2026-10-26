@@ -1,0 +1,144 @@
+name: Self-build patched FastCtx 0.2.6
+
+on:
+  push:
+    branches: [ci/self-build-v026-reaping-20261026]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ad08a8344a2e825400452e0e51b0f3a4d0cf45a5
+  SOURCE_TREE: 59720600be707e5858c1cf0d97197c1b536822ba
+  FASTCTX_DISTRIBUTION: self-build
+  FASTCTX_PDFIUM_CACHE_DIR: ${{ github.workspace }}/.pdfium-archive-cache
+  CARGO_BUILD_JOBS: '2'
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            binary: fastctx.exe
+            features: ''
+            pdf: true
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: fastctx
+            features: ''
+            pdf: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: fastctx
+            features: --no-default-features
+            pdf: false
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary: fastctx
+            features: ''
+            pdf: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: SnapdragonLee/fastctx
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify exact source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          test -z "$(git status --porcelain)"
+      - name: Prepare Git Bash temporary directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $git = (Get-Command git.exe -ErrorAction Stop).Source
+          $cursor = Split-Path $git -Parent
+          while ($cursor -and -not (Test-Path (Join-Path $cursor 'usr/bin/bash.exe'))) {
+            $cursor = Split-Path $cursor -Parent
+          }
+          if (-not $cursor) { throw 'Cannot locate Git Bash' }
+          $bash = Join-Path $cursor 'usr/bin/bash.exe'
+          $posixTemp = (& $bash --noprofile --norc -c 'PATH=/usr/bin:/bin:$PATH; cygpath -w /tmp').Trim()
+          foreach ($path in @($posixTemp, $env:TEMP, $env:TMP)) {
+            if ($path) { New-Item -ItemType Directory -Force -Path $path | Out-Null }
+          }
+          & $bash --noprofile --norc -c 'PATH=/usr/bin:/bin:$PATH; mkdir -p /tmp; test -w /tmp'
+          if ($LASTEXITCODE -ne 0) { throw 'Git Bash temp directory unavailable' }
+      - uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: self-build-v026-${{ matrix.target }}
+      - name: Install pinned Zig for glibc 2.31
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.14.1
+      - name: Install pinned cargo-zigbuild
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo install cargo-zigbuild --locked --version 0.23.0
+      - name: Test Unix bootstrap reaping
+        if: runner.os != 'Windows'
+        run: cargo test --locked --release --target ${{ matrix.target }} ${{ matrix.features }} --lib bootstrap -- --test-threads=1
+      - name: Test shell and parent lifecycle
+        run: cargo test --locked --release --target ${{ matrix.target }} ${{ matrix.features }} --test shell_contract --test parent_watch_contract -- --test-threads=1
+      - name: Test MCP service contracts
+        run: cargo test --locked --release --target ${{ matrix.target }} ${{ matrix.features }} --test server_contract -- --test-threads=1
+      - name: Test PDF contracts
+        if: matrix.pdf
+        run: cargo test --locked --release --target ${{ matrix.target }} --test pdf_contract -- --test-threads=1
+      - name: Drain only test executables before relinking
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/drain-test-processes.ps1 -TargetDirectory "${{ github.workspace }}/target"
+      - name: Build native release executable
+        if: matrix.target != 'x86_64-unknown-linux-gnu'
+        run: cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
+      - name: Build glibc 2.31 release executable
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          set -euo pipefail
+          cargo zigbuild --locked --release --target x86_64-unknown-linux-gnu.2.31
+          highest=$(readelf -W --version-info target/x86_64-unknown-linux-gnu/release/fastctx | sed -nE 's/.*Name: GLIBC_([0-9.]+).*/\1/p' | sort -Vu | tail -n 1)
+          test -n "$highest"
+          test "$(printf '%s\n' "$highest" 2.31 | sort -V | tail -n 1)" = 2.31
+          printf 'Highest required GLIBC version: %s\n' "$highest"
+      - name: Package executable and source identity
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+          PDF: ${{ matrix.pdf }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "target/$TARGET/release/$BINARY" dist/
+          cp LICENSE-APACHE NOTICE THIRD_PARTY_LICENSES.md THIRD_PARTY_LICENSES_RUST.md dist/
+          cp -R third-party dist/third-party
+          "dist/$BINARY" --version
+          cat > dist/BUILD.json <<EOF
+          {"version":"0.2.6","repository":"SnapdragonLee/fastctx","branch":"fix/reap-bootstrap-v0.2.6","source_sha":"$SOURCE_SHA","source_tree":"$SOURCE_TREE","target":"$TARGET","pdf":$PDF,"distribution":"self-build","workflow_run_id":"$GITHUB_RUN_ID","workflow_sha":"$GITHUB_SHA"}
+          EOF
+          rustc -vV > dist/TOOLCHAIN.txt
+          cargo --version >> dist/TOOLCHAIN.txt
+          (cd dist && if command -v sha256sum >/dev/null; then sha256sum "$BINARY" > SHA256SUMS; else shasum -a 256 "$BINARY" > SHA256SUMS; fi)
+          cat dist/BUILD.json dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fastctx-0.2.6-ad08a834-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
