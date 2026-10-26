@@ -1,0 +1,73 @@
+name: Bootstrap reaping proof (v0.2.6)
+on:
+  push:
+    branches: [codex/reaping-proof-v026]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal --component rustfmt && rustup default 1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: reaping-v026
+      - name: Format changed sources
+        run: |
+          cargo fmt --all
+          git diff -- src/runtime/mod.rs src/shell/jobs/host.rs tests/shell_contract.rs > rustfmt.patch
+      - name: Bootstrap ownership unit tests
+        run: cargo test --locked --no-default-features --lib bootstrap -- --nocapture
+      - name: Real job and parent lifetime contracts
+        run: cargo test --locked --no-default-features --test shell_contract --test parent_watch_contract -- --nocapture
+      - name: Prove the regression fails without the successful-launch fix
+        if: runner.os != 'Windows'
+        run: |
+          trap 'git checkout -- src/shell/jobs/host.rs; git apply --include=src/shell/jobs/host.rs rustfmt.patch' EXIT
+          node <<'JS'
+          const fs = require('fs'), cp = require('child_process');
+          const file = 'src/shell/jobs/host.rs';
+          const fixed = fs.readFileSync(file, 'utf8');
+          const marker = '#[cfg(all(test, unix))]\nmod bootstrap_reaping_tests';
+          const i = fixed.indexOf(marker);
+          if (i < 0) throw Error('missing ownership regression tests');
+          const old = cp.execFileSync('git', ['show', '22b40ea324a186a921dfe38c205e3ffacdf6546d:' + file], {encoding:'utf8'});
+          fs.writeFileSync(file, old + '\n' + fixed.slice(i));
+          JS
+          set +e
+          cargo test --locked --no-default-features --lib bootstrap_is_reaped_after_ready -- --nocapture > mutation.log 2>&1
+          result=$?
+          set -e
+          cat mutation.log
+          test "$result" -ne 0
+          grep -q 'left bootstrap .* unreaped' mutation.log
+          grep -q 'test result: FAILED' mutation.log
+      - name: Record tested source identities
+        if: always()
+        run: |
+          node <<'JS'
+          const fs=require('fs'), crypto=require('crypto');
+          const files=['Cargo.lock','src/runtime/mod.rs','src/shell/jobs/host.rs','tests/shell_contract.rs'];
+          const result={sha:process.env.GITHUB_SHA,os:process.platform,files:{}};
+          for(const f of files) result.files[f]=crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+          fs.writeFileSync('proof-inputs.json',JSON.stringify(result,null,2));
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-v026-${{ runner.os }}
+          path: |
+            rustfmt.patch
+            mutation.log
+            proof-inputs.json
