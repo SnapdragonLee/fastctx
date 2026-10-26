@@ -1,0 +1,70 @@
+name: Detached launch reaping proof (main)
+on:
+  push:
+    branches: [codex/reaping-proof-main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal --component rustfmt && rustup default 1.92.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: reaping-main
+      - name: Format changed source
+        run: |
+          cargo fmt --all
+          git diff -- crates/fastctx-hands/tests/job_lifecycle.rs > rustfmt.patch
+      - name: Real detached job lifecycle
+        env:
+          FASTCTX_TEST_BASH: ${{ runner.os == 'Windows' && 'C:/Program Files/Git/bin/bash.exe' || '/bin/bash' }}
+        run: cargo test --locked -p fastctx-hands --test job_lifecycle
+      - name: Prove the assertion detects an unreaped bootstrap
+        if: runner.os != 'Windows'
+        env:
+          FASTCTX_TEST_BASH: /bin/bash
+        run: |
+          trap 'git checkout -- crates/fastctx-platform/src/detach.rs' EXIT
+          node <<'JS'
+          const fs=require('fs'), file='crates/fastctx-platform/src/detach.rs';
+          const source=fs.readFileSync(file,'utf8');
+          if(!source.includes('spawned?.wait()?;')) throw Error('missing bootstrap wait');
+          fs.writeFileSync(file,source.replace('spawned?.wait()?;', 'drop(spawned?);'));
+          JS
+          set +e
+          cargo test --locked -p fastctx-hands --test job_lifecycle > mutation.log 2>&1
+          result=$?
+          set -e
+          cat mutation.log
+          test "$result" -ne 0
+          grep -q 'detached launch left a direct child' mutation.log
+      - name: Record tested source identities
+        if: always()
+        run: |
+          node <<'JS'
+          const fs=require('fs'),crypto=require('crypto');
+          const files=['Cargo.lock','crates/fastctx-hands/tests/job_lifecycle.rs','crates/fastctx-platform/src/detach.rs'];
+          const result={sha:process.env.GITHUB_SHA,os:process.platform,files:{}};
+          for(const f of files) result.files[f]=crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+          fs.writeFileSync('proof-inputs.json',JSON.stringify(result,null,2));
+          JS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bootstrap-main-${{ runner.os }}
+          path: |
+            rustfmt.patch
+            mutation.log
+            proof-inputs.json
