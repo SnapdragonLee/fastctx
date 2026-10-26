@@ -78,9 +78,9 @@ pub(crate) fn launch_supervisor(
             // Dropping std::process::Child does not reap it. The detached
             // job-host owns the command and must keep running independently.
             #[cfg(unix)]
-            child.wait().map_err(|error| {
-                format!("Cannot reap the background job bootstrap: {error}.")
-            })?;
+            child
+                .wait()
+                .map_err(|error| format!("Cannot reap the background job bootstrap: {error}."))?;
             Ok(())
         }
         Ok(Ok(line)) if line.starts_with("ERROR\t") => {
@@ -870,7 +870,10 @@ mod bootstrap_reaping_tests {
             root.to_path_buf(),
             vec![
                 ("PATH".into(), "/usr/bin:/bin".into()),
-                ("TEST_BOOTSTRAP_PID_FILE".into(), pid_file.as_os_str().to_owned()),
+                (
+                    "TEST_BOOTSTRAP_PID_FILE".into(),
+                    pid_file.as_os_str().to_owned(),
+                ),
                 ("TEST_BOOTSTRAP_REPLY".into(), reply.into()),
             ],
         );
@@ -903,7 +906,10 @@ mod bootstrap_reaping_tests {
                 assert_eq!(error.raw_os_error(), Some(libc::ECHILD), "{error}");
                 break;
             }
-            assert_ne!(waited, pid, "launch_supervisor left bootstrap {pid} unreaped");
+            assert_ne!(
+                waited, pid,
+                "launch_supervisor left bootstrap {pid} unreaped"
+            );
             if Instant::now() >= deadline {
                 unsafe {
                     libc::kill(pid, libc::SIGKILL);
